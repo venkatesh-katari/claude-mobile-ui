@@ -136,6 +136,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   const [showAtPicker, setShowAtPicker] = useState(false);
   const chatRef = useRef(null);
   const inputRef = useRef(null);
+  const containerRef = useRef(null);
   const abortRef = useRef(null);
   const processIdRef = useRef(null);
   const assistantTextRef = useRef('');
@@ -202,6 +203,25 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
     }
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // Shrink container to visual viewport height so keyboard doesn't cover input
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    function onResize() {
+      const container = containerRef.current;
+      if (!container) return;
+      const offset = window.innerHeight - vv.height - vv.offsetTop;
+      container.style.height = (vv.height) + 'px';
+      container.style.transform = offset > 0 ? `translateY(-${offset}px)` : '';
+    }
+    vv.addEventListener('resize', onResize);
+    vv.addEventListener('scroll', onResize);
+    return () => {
+      vv.removeEventListener('resize', onResize);
+      vv.removeEventListener('scroll', onResize);
+    };
   }, []);
 
   async function consumeSSEStream(res) {
@@ -436,7 +456,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   ];
 
   return (
-    <div className="cv-container">
+    <div className="cv-container" ref={containerRef}>
       {showExplorer && (
         <Explorer
           projectPath={projectPath}
