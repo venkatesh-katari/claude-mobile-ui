@@ -72,6 +72,8 @@ const activeProcesses = new Map();
 const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT || '2', 10);
 // streamBuffers: processId -> { events: [...], done: bool }
 const streamBuffers = new Map();
+// activeSessionIds: sessionId -> processId — detect desktop/mobile conflicts
+const activeSessionIds = new Map();
 
 // ============================================================================
 // API: Auth check — returns whether PIN is required and validates it
@@ -441,6 +443,7 @@ app.post('/api/chat', (req, res) => {
 
   const processId = Date.now().toString(36);
   activeProcesses.set(processId, claudeProcess);
+  if (sessionId) activeSessionIds.set(sessionId, processId);
 
   // Buffer all events so clients can reconnect and replay
   const streamBuf = { events: [], done: false };
@@ -477,6 +480,10 @@ app.post('/api/chat', (req, res) => {
         }
         // Auto-title: once we get a session_id from the result, write the first
         // user message as the session summary so the home screen is never "(no title)"
+        if (obj.type === 'result' && obj.session_id) {
+          // Register new session ID so conflict detection works mid-stream
+          if (!sessionId) activeSessionIds.set(obj.session_id, processId);
+        }
         if (obj.type === 'result' && obj.session_id && !titleSaved && !sessionId) {
           titleSaved = true;
           const title = message.trim().slice(0, 80).replace(/\n/g, ' ');
@@ -532,7 +539,7 @@ app.post('/api/chat', (req, res) => {
     streamBuf.done = true;
     res.end();
     activeProcesses.delete(processId);
-    // Clean up buffer after 5 minutes
+    if (sessionId) activeSessionIds.delete(sessionId);
     setTimeout(() => streamBuffers.delete(processId), 5 * 60 * 1000);
   });
 
@@ -541,6 +548,7 @@ app.post('/api/chat', (req, res) => {
     streamBuf.done = true;
     res.end();
     activeProcesses.delete(processId);
+    if (sessionId) activeSessionIds.delete(sessionId);
     setTimeout(() => streamBuffers.delete(processId), 5 * 60 * 1000);
   });
 
@@ -617,6 +625,33 @@ app.post('/api/abort/:processId', (req, res) => {
   } else {
     res.status(404).json({ error: 'Process not found or already finished' });
   }
+});
+
+// ============================================================================
+// API: List active session IDs (conflict detection)
+// ============================================================================
+app.get('/api/sessions/active', (_req, res) => {
+  res.json([...activeSessionIds.keys()]);
+});
+
+// ============================================================================
+// API: Take over a session — abort the conflicting process then let caller resume
+// ============================================================================
+app.post('/api/sessions/:sessionId/takeover', (req, res) => {
+  const { sessionId } = req.params;
+  const processId = activeSessionIds.get(sessionId);
+  if (!processId) return res.json({ ok: true, wasActive: false });
+
+  const proc = activeProcesses.get(processId);
+  if (proc && !proc.killed) proc.kill('SIGTERM');
+  activeProcesses.delete(processId);
+  activeSessionIds.delete(sessionId);
+
+  // Mark stream buffer done so any replay clients get a clean close
+  const buf = streamBuffers.get(processId);
+  if (buf) { buf.done = true; }
+
+  res.json({ ok: true, wasActive: true });
 });
 
 // ============================================================================

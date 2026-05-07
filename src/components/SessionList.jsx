@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Plus, Sun, Moon, Search, ChevronDown, Pencil } from 'lucide-react';
+import { Plus, Sun, Moon, Search, ChevronDown, Pencil, Radio } from 'lucide-react';
 import { apiFetch } from '../utils/api';
 import { useStatus } from '../utils/useStatus';
 import './SessionList.css';
@@ -54,7 +54,7 @@ function RenameInput({ value, sessionId, onDone }) {
   );
 }
 
-function SessionCard({ session, projectId, onOpen, onRename, renamingId, onRenameComplete }) {
+function SessionCard({ session, projectId, onOpen, onRename, renamingId, onRenameComplete, isActive }) {
   const isRenaming = renamingId === session.sessionId;
   const displayTitle = session.summary && session.summary !== '(no title)'
     ? session.summary
@@ -62,7 +62,7 @@ function SessionCard({ session, projectId, onOpen, onRename, renamingId, onRenam
 
   return (
     <div
-      className="sl-session-card"
+      className={`sl-session-card ${isActive ? 'sl-session-active' : ''}`}
       onClick={() => !isRenaming && onOpen(session.sessionId, session.projectPath, projectId, session.summary)}
     >
       <div className="sl-session-title-row">
@@ -77,6 +77,12 @@ function SessionCard({ session, projectId, onOpen, onRename, renamingId, onRenam
             <span className={`sl-session-title ${!displayTitle ? 'sl-session-title-empty' : ''}`}>
               {displayTitle || 'Untitled session'}
             </span>
+            {isActive && (
+              <span className="sl-active-badge" title="Running on another device">
+                <Radio size={10} />
+                Live
+              </span>
+            )}
             <button
               className="sl-rename-btn"
               title="Rename"
@@ -101,9 +107,24 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [renamingId, setRenamingId] = useState(null);
+  const [activeSessionIds, setActiveSessionIds] = useState(new Set());
+  const [conflictSession, setConflictSession] = useState(null); // { sessionId, projectPath, projectId, summary }
   const status = useStatus();
 
   useEffect(() => { loadProjects(); }, []);
+
+  // Refresh active sessions every 5 seconds
+  useEffect(() => {
+    function fetchActive() {
+      apiFetch('/api/sessions/active')
+        .then(r => r.json())
+        .then(ids => setActiveSessionIds(new Set(ids)))
+        .catch(() => {});
+    }
+    fetchActive();
+    const interval = setInterval(fetchActive, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   async function loadProjects() {
     try {
@@ -141,6 +162,14 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
     });
   }
 
+  const handleOpenSession = useCallback((sessionId, projectPath, projectId, summary) => {
+    if (activeSessionIds.has(sessionId)) {
+      setConflictSession({ sessionId, projectPath, projectId, summary });
+    } else {
+      onOpenSession(sessionId, projectPath, projectId, summary);
+    }
+  }, [activeSessionIds, onOpenSession]);
+
   const handleRenameComplete = useCallback((projectId, sessionId, newTitle) => {
     setProjects(prev => prev.map(p =>
       p.id !== projectId ? p : {
@@ -168,6 +197,47 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
 
   return (
     <div className="sl-container">
+
+      {/* Conflict bottom sheet */}
+      {conflictSession && (
+        <div className="sl-conflict-overlay" onClick={() => setConflictSession(null)}>
+          <div className="sl-conflict-sheet" onClick={e => e.stopPropagation()}>
+            <div className="sl-conflict-handle" />
+            <div className="sl-conflict-icon">⚠️</div>
+            <h3 className="sl-conflict-title">Session is active on desktop</h3>
+            <p className="sl-conflict-body">
+              Claude is currently running in <strong>{conflictSession.summary || 'this session'}</strong> on another window or device. Opening it here at the same time will corrupt the conversation history.
+            </p>
+            <button
+              className="sl-conflict-btn sl-conflict-takeover"
+              onClick={async () => {
+                await apiFetch(`/api/sessions/${conflictSession.sessionId}/takeover`, { method: 'POST' });
+                setActiveSessionIds(prev => { const n = new Set(prev); n.delete(conflictSession.sessionId); return n; });
+                onOpenSession(conflictSession.sessionId, conflictSession.projectPath, conflictSession.projectId, conflictSession.summary);
+                setConflictSession(null);
+              }}
+            >
+              Take Over — stop desktop &amp; continue here
+            </button>
+            <button
+              className="sl-conflict-btn sl-conflict-anyway"
+              onClick={() => {
+                onOpenSession(conflictSession.sessionId, conflictSession.projectPath, conflictSession.projectId, conflictSession.summary);
+                setConflictSession(null);
+              }}
+            >
+              Continue Anyway (risk corruption)
+            </button>
+            <button
+              className="sl-conflict-btn sl-conflict-cancel"
+              onClick={() => setConflictSession(null)}
+            >
+              Go Back
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="sl-header">
         <h1>Claude</h1>
         <div className="sl-header-actions">
@@ -229,10 +299,11 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
                 key={s.sessionId}
                 session={s}
                 projectId={s.projectId}
-                onOpen={onOpenSession}
+                onOpen={handleOpenSession}
                 onRename={setRenamingId}
                 renamingId={renamingId}
                 onRenameComplete={handleRenameComplete}
+                isActive={activeSessionIds.has(s.sessionId)}
               />
             ))}
           </div>
@@ -268,10 +339,11 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
                           key={s.sessionId}
                           session={s}
                           projectId={proj.id}
-                          onOpen={onOpenSession}
+                          onOpen={handleOpenSession}
                           onRename={setRenamingId}
                           renamingId={renamingId}
                           onRenameComplete={handleRenameComplete}
+                          isActive={activeSessionIds.has(s.sessionId)}
                         />
                       ))}
                     </div>

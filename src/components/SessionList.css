@@ -141,6 +141,27 @@
 }
 .sl-session-card:hover { background: var(--bg-hover); border-color: var(--accent); }
 .sl-session-card:active { transform: scale(0.99); }
+.sl-session-card.sl-session-active {
+  border-color: var(--success);
+  background: rgba(74, 222, 128, 0.04);
+}
+.sl-session-card.sl-session-active:hover { border-color: var(--success); }
+
+/* Active badge */
+.sl-active-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--success);
+  background: rgba(74, 222, 128, 0.12);
+  border: 1px solid rgba(74, 222, 128, 0.3);
+  border-radius: 10px;
+  padding: 2px 7px;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
 
 .sl-session-title-row {
   display: flex;
@@ -266,6 +287,85 @@
 .sl-group-sessions {
   padding: 6px 8px 8px;
   background: var(--bg);
+}
+
+/* ── Conflict bottom sheet ────────────────────────────────── */
+.sl-conflict-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: flex-end;
+}
+.sl-conflict-sheet {
+  width: 100%;
+  background: var(--bg-card);
+  border-radius: 20px 20px 0 0;
+  border-top: 1px solid var(--border);
+  padding: 0 20px calc(var(--safe-bottom) + 16px);
+  animation: sl-slide-up 0.24s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  box-shadow: 0 -8px 40px rgba(0, 0, 0, 0.3);
+}
+@keyframes sl-slide-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+.sl-conflict-handle {
+  width: 40px;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  margin: 12px auto 20px;
+}
+.sl-conflict-icon {
+  font-size: 36px;
+  text-align: center;
+  margin-bottom: 12px;
+}
+.sl-conflict-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  text-align: center;
+  margin-bottom: 10px;
+}
+.sl-conflict-body {
+  font-size: 14px;
+  color: var(--text-dim);
+  text-align: center;
+  line-height: 1.6;
+  margin-bottom: 24px;
+}
+.sl-conflict-body strong { color: var(--text); font-weight: 600; }
+.sl-conflict-btn {
+  display: block;
+  width: 100%;
+  border: none;
+  border-radius: 14px;
+  padding: 15px;
+  font-size: 15px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  margin-bottom: 10px;
+  transition: opacity 0.15s;
+}
+.sl-conflict-btn:hover { opacity: 0.88; }
+.sl-conflict-takeover {
+  background: var(--accent);
+  color: #fff;
+}
+.sl-conflict-anyway {
+  background: var(--bg-input);
+  color: var(--error);
+  border: 1px solid var(--error) !important;
+  font-weight: 500;
+}
+.sl-conflict-cancel {
+  background: var(--bg-input);
+  color: var(--text);
 }
 
 /* ── Empty state ──────────────────────────────────────────── */

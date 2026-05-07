@@ -5,7 +5,8 @@ import {
   ArrowLeft, FolderOpen, MoreHorizontal, Mic, MicOff, ArrowUp,
   FileText, FilePen, Terminal, Search, Globe, List, BookOpen,
   Wrench, Sun, Moon, Download, Check, ChevronDown, ChevronUp, Copy,
-  RotateCcw, WifiOff, AlertCircle
+  RotateCcw, WifiOff, Square, ArrowDown, Clock, Pencil, AtSign,
+  DollarSign, X, History
 } from 'lucide-react';
 import { copyToClipboard } from '../utils/clipboard';
 import { apiFetch } from '../utils/api';
@@ -120,10 +121,19 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   const [isStreaming, setIsStreaming] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [inputText, setInputText] = useState('');
-  const [sendError, setSendError] = useState(null); // { text, reason }
+  const [sendError, setSendError] = useState(null);
   const [showExplorer, setShowExplorer] = useState(false);
   const [expandedPaths, setExpandedPaths] = useState(() => new Set());
   const [isNewChat, setIsNewChat] = useState(!sessionId);
+  const [activeToolStatus, setActiveToolStatus] = useState(null); // "Writing server.js…"
+  const [atBottom, setAtBottom] = useState(true);
+  const [sessionCost, setSessionCost] = useState(0);
+  const [promptHistory, setPromptHistory] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('cv_prompt_history') || '[]'); } catch { return []; }
+  });
+  const [showHistory, setShowHistory] = useState(false);
+  const [editingMsg, setEditingMsg] = useState(null); // { index, text }
+  const [showAtPicker, setShowAtPicker] = useState(false);
   const chatRef = useRef(null);
   const inputRef = useRef(null);
   const abortRef = useRef(null);
@@ -175,11 +185,24 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
     }
   }
 
+  // Auto-scroll only when already at bottom
   useEffect(() => {
-    if (chatRef.current) {
-      chatRef.current.scrollTop = chatRef.current.scrollHeight;
+    const el = chatRef.current;
+    if (!el) return;
+    if (atBottom) el.scrollTop = el.scrollHeight;
+  }, [messages, isStreaming, atBottom]);
+
+  // Track whether user is at the bottom
+  useEffect(() => {
+    const el = chatRef.current;
+    if (!el) return;
+    function onScroll() {
+      const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      setAtBottom(distFromBottom < 80);
     }
-  }, [messages, isStreaming]);
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
 
   async function consumeSSEStream(res) {
     const reader = res.body.getReader();
@@ -220,6 +243,9 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
                     return updated;
                   });
                 } else if (block.type === 'tool_use') {
+                  // Update active tool status line
+                  const summary = getToolSummary(block.name, block.input);
+                  setActiveToolStatus(summary ? `${block.name} · ${summary}` : block.name);
                   setMessages(prev => {
                     const updated = [...prev];
                     const last = updated[updated.length - 1];
@@ -239,6 +265,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
             } else if (obj.type === 'result') {
               if (obj.session_id) onUpdateState({ sessionId: obj.session_id });
               if (obj.total_cost_usd) {
+                setSessionCost(prev => prev + obj.total_cost_usd);
                 setMessages(prev => {
                   const updated = [...prev];
                   const last = updated[updated.length - 1];
@@ -248,7 +275,9 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
                   return updated;
                 });
               }
+              setActiveToolStatus(null);
             } else if (obj.type === 'done') {
+              setActiveToolStatus(null);
               setMessages(prev => {
                 const updated = [...prev];
                 const last = updated[updated.length - 1];
@@ -262,6 +291,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
       }
     } finally {
       setIsStreaming(false);
+      setActiveToolStatus(null);
       assistantTextRef.current = '';
       processIdRef.current = null;
       abortRef.current = null;
@@ -298,9 +328,19 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
     setInputText('');
     setSendError(null);
     setIsNewChat(false);
+    setAtBottom(true);
     assistantTextRef.current = '';
+    // Save to prompt history (deduplicated, max 20)
+    if (!overrideText) {
+      setPromptHistory(prev => {
+        const next = [text, ...prev.filter(p => p !== text)].slice(0, 20);
+        localStorage.setItem('cv_prompt_history', JSON.stringify(next));
+        return next;
+      });
+    }
+    // Haptic feedback on send
+    try { navigator.vibrate?.(20); } catch {}
     setMessages(prev => {
-      // Avoid duplicating the user message when retrying
       const last = prev[prev.length - 1];
       if (last?.role === 'user' && last.content === text) return prev;
       return [...prev, { role: 'user', content: text }];
@@ -337,6 +377,26 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
     }
   }, [inputText, isStreaming, sessionId, projectPath, permissionMode, onUpdateState]);
 
+  function handleStop() {
+    if (processIdRef.current) {
+      apiFetch(`/api/abort/${processIdRef.current}`, { method: 'POST' }).catch(() => {});
+    }
+    abortRef.current?.abort();
+    sessionStorage.removeItem(ACTIVE_PROCESS_KEY);
+    setIsStreaming(false);
+    setActiveToolStatus(null);
+    try { navigator.vibrate?.(40); } catch {}
+  }
+
+  function handleEditResend(index, newText) {
+    setEditingMsg(null);
+    const trimmed = newText.trim();
+    if (!trimmed) return;
+    // Slice messages up to (not including) the edited message, then resend
+    setMessages(prev => prev.slice(0, index));
+    sendMessage(trimmed);
+  }
+
   function handleKeydown(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   }
@@ -370,6 +430,11 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
 
   const modeBadgeLabel = { plan: 'Plan', acceptEdits: 'Edits', auto: 'Auto', default: 'Default', bypassPermissions: 'Bypass' };
 
+  const QUICK_PROMPTS = [
+    'Review this code', 'Write tests', 'Explain this', 'Fix the bug',
+    'What changed?', 'Summarize', 'Refactor', 'Add error handling',
+  ];
+
   return (
     <div className="cv-container">
       {showExplorer && (
@@ -382,12 +447,57 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
         />
       )}
 
+      {/* Prompt history bottom sheet */}
+      {showHistory && (
+        <div className="cv-menu-overlay" onClick={() => setShowHistory(false)}>
+          <div className="cv-menu-sheet" onClick={e => e.stopPropagation()}>
+            <div className="cv-menu-handle" />
+            <div className="cv-menu-section-label">Recent prompts</div>
+            {promptHistory.length === 0 && (
+              <p className="cv-history-empty">No prompts yet</p>
+            )}
+            {promptHistory.map((p, i) => (
+              <button key={i} className="cv-menu-item" onClick={() => {
+                setInputText(p);
+                setShowHistory(false);
+                setTimeout(() => inputRef.current?.focus(), 50);
+              }}>
+                <History size={14} className="cv-menu-icon" />
+                <span className="cv-menu-item-label cv-history-item">{p}</span>
+              </button>
+            ))}
+            <button className="cv-menu-cancel" onClick={() => setShowHistory(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* @ file picker bottom sheet */}
+      {showAtPicker && (
+        <AtFilePicker
+          projectPath={projectPath}
+          onSelect={(path) => {
+            setInputText(prev => {
+              const atIdx = prev.lastIndexOf('@');
+              return (atIdx >= 0 ? prev.slice(0, atIdx) : prev) + path + ' ';
+            });
+            setShowAtPicker(false);
+            setTimeout(() => inputRef.current?.focus(), 50);
+          }}
+          onClose={() => setShowAtPicker(false)}
+        />
+      )}
+
       <div className="cv-header">
         <button className="cv-back" onClick={handleBack}>
           <ArrowLeft size={18} />
           <span className="cv-back-label">Back</span>
         </button>
-        <span className="cv-title">{title}</span>
+        <div className="cv-header-center">
+          <span className="cv-title">{title}</span>
+          {sessionCost > 0 && (
+            <span className="cv-session-cost">${sessionCost.toFixed(3)}</span>
+          )}
+        </div>
         <div className="cv-header-actions">
           <button
             className={`cv-explorer-btn ${showExplorer ? 'active' : ''}`}
@@ -410,55 +520,114 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
         </div>
       </div>
 
-      <div className="cv-chat" ref={chatRef}>
-        {isNewChat ? (
-          <NewChatSetup projectPath={projectPath} permissionMode={permissionMode} onUpdateState={onUpdateState} />
-        ) : loadingMessages ? (
-          <MessageSkeleton />
-        ) : (
-          <>
-            {messages.map((msg, i) => <MessageBubble key={i} msg={msg} />)}
-            {sendError && (
-              <div className="cv-send-error">
-                <WifiOff size={13} className="cv-send-error-icon" />
-                <span className="cv-send-error-reason">{sendError.reason}</span>
-                <button
-                  className="cv-retry-btn"
-                  onClick={() => sendMessage(sendError.text)}
-                >
-                  <RotateCcw size={12} />
-                  Retry
-                </button>
-              </div>
-            )}
-          </>
+      <div className="cv-chat-wrap">
+        <div className="cv-chat" ref={chatRef}>
+          {isNewChat ? (
+            <NewChatSetup projectPath={projectPath} permissionMode={permissionMode} onUpdateState={onUpdateState} />
+          ) : loadingMessages ? (
+            <MessageSkeleton />
+          ) : (
+            <>
+              {messages.map((msg, i) => (
+                <MessageBubble
+                  key={i}
+                  msg={msg}
+                  index={i}
+                  isStreaming={isStreaming}
+                  editingMsg={editingMsg}
+                  onEditStart={(idx, text) => setEditingMsg({ index: idx, text })}
+                  onEditCancel={() => setEditingMsg(null)}
+                  onEditResend={handleEditResend}
+                />
+              ))}
+              {sendError && (
+                <div className="cv-send-error">
+                  <WifiOff size={13} className="cv-send-error-icon" />
+                  <span className="cv-send-error-reason">{sendError.reason}</span>
+                  <button className="cv-retry-btn" onClick={() => sendMessage(sendError.text)}>
+                    <RotateCcw size={12} />
+                    Retry
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Scroll-to-bottom FAB */}
+        {!atBottom && (
+          <button
+            className={`cv-scroll-fab ${isStreaming ? 'streaming' : ''}`}
+            onClick={() => {
+              setAtBottom(true);
+              chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: 'smooth' });
+            }}
+          >
+            <ArrowDown size={16} />
+            {isStreaming && <span className="cv-scroll-fab-label">Responding…</span>}
+          </button>
         )}
       </div>
 
-      {/* Thinking — dots only, no text */}
+      {/* Active tool status + stop button */}
       {isStreaming && (
-        <div className="cv-thinking">
-          <span className="cv-dot" /><span className="cv-dot" /><span className="cv-dot" />
+        <div className="cv-status-bar">
+          <div className="cv-status-left">
+            <span className="cv-dot" /><span className="cv-dot" /><span className="cv-dot" />
+            {activeToolStatus && <span className="cv-status-tool">{activeToolStatus}</span>}
+          </div>
+          <button className="cv-stop-btn" onClick={handleStop}>
+            <Square size={11} fill="currentColor" />
+            Stop
+          </button>
+        </div>
+      )}
+
+      {/* Quick prompt chips */}
+      {!isStreaming && !isNewChat && (
+        <div className="cv-chips-bar">
+          {QUICK_PROMPTS.map(p => (
+            <button key={p} className="cv-chip" onClick={() => {
+              setInputText(p);
+              setTimeout(() => inputRef.current?.focus(), 50);
+            }}>{p}</button>
+          ))}
         </div>
       )}
 
       <div className="cv-input-bar">
+        <button className="cv-input-action-btn" onClick={() => setShowHistory(true)} title="Prompt history">
+          <History size={16} />
+        </button>
+        <button
+          className="cv-input-action-btn"
+          onClick={() => {
+            setInputText(prev => prev + '@');
+            setShowAtPicker(true);
+          }}
+          title="Mention a file"
+        >
+          <AtSign size={16} />
+        </button>
         <textarea
           ref={inputRef}
           className="cv-input"
-          placeholder="Message Claude..."
+          placeholder="Message Claude…"
           rows={1}
           value={inputText}
           onChange={e => {
-            setInputText(e.target.value);
+            const val = e.target.value;
+            setInputText(val);
             if (sendError) setSendError(null);
+            // Open @ picker when @ is typed
+            if (val.endsWith('@')) setShowAtPicker(true);
             e.target.style.height = 'auto';
             e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
           }}
           onKeyDown={handleKeydown}
         />
         <VoiceButton onTranscript={(t) => setInputText(prev => prev + (prev && !prev.endsWith(' ') ? ' ' : '') + t)} />
-        <button className="cv-send" disabled={!inputText.trim() || isStreaming} onClick={sendMessage}>
+        <button className="cv-send" disabled={!inputText.trim() || isStreaming} onClick={() => sendMessage()}>
           <ArrowUp size={18} strokeWidth={2.5} />
         </button>
       </div>
@@ -566,11 +735,60 @@ function ToolChip({ part }) {
 }
 
 // ============================================================================
+// @ file picker bottom sheet
+// ============================================================================
+function AtFilePicker({ projectPath, onSelect, onClose }) {
+  const [entries, setEntries] = useState([]);
+  const [path, setPath] = useState(projectPath || null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    apiFetch(`/api/files?dir=${encodeURIComponent(path || '')}`)
+      .then(r => r.json())
+      .then(data => { setEntries(data); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [path]);
+
+  return (
+    <div className="cv-menu-overlay" onClick={onClose}>
+      <div className="cv-menu-sheet cv-at-sheet" onClick={e => e.stopPropagation()}>
+        <div className="cv-menu-handle" />
+        <div className="cv-at-header">
+          <span className="cv-menu-section-label" style={{ padding: 0 }}>
+            {path ? path.split('/').pop() : 'Files'}
+          </span>
+          {path && path !== projectPath && (
+            <button className="cv-at-up" onClick={() => setPath(p => p.split('/').slice(0, -1).join('/') || projectPath)}>
+              ↑ Up
+            </button>
+          )}
+        </div>
+        {loading && <p className="cv-history-empty">Loading…</p>}
+        {!loading && entries.map(e => (
+          <button key={e.path} className="cv-menu-item" onClick={() => {
+            if (e.isDir) setPath(e.path);
+            else onSelect(e.path);
+          }}>
+            <span className="cv-menu-icon" style={{ fontSize: 14 }}>{e.isDir ? '📁' : '📄'}</span>
+            <span className="cv-menu-item-label">{e.name}</span>
+            {!e.isDir && <span className="cv-menu-item-desc" style={{ fontSize: 11 }}>{e.name.split('.').pop()}</span>}
+          </button>
+        ))}
+        <button className="cv-menu-cancel" onClick={onClose}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
 // Message bubble
 // ============================================================================
-function MessageBubble({ msg }) {
+function MessageBubble({ msg, index, isStreaming, editingMsg, onEditStart, onEditCancel, onEditResend }) {
   const [copied, setCopied] = useState(false);
   const [showCost, setShowCost] = useState(false);
+  const longPressTimer = useRef(null);
+  const isEditingThis = editingMsg?.index === index;
 
   function handleCopy() {
     let text = msg.role === 'user' ? msg.content
@@ -578,9 +796,49 @@ function MessageBubble({ msg }) {
     copyToClipboard(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
   }
 
+  // Long press detection for mobile edit
+  function onPressStart() {
+    longPressTimer.current = setTimeout(() => {
+      try { navigator.vibrate?.(30); } catch {}
+      onEditStart(index, msg.content);
+    }, 500);
+  }
+  function onPressEnd() { clearTimeout(longPressTimer.current); }
+
   if (msg.role === 'user') {
+    if (isEditingThis) {
+      return (
+        <div className="cv-msg cv-user">
+          <div className="cv-edit-wrap">
+            <textarea
+              className="cv-edit-input"
+              defaultValue={editingMsg.text}
+              autoFocus
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onEditResend(index, e.target.value); }
+                if (e.key === 'Escape') onEditCancel();
+              }}
+            />
+            <div className="cv-edit-actions">
+              <button className="cv-edit-cancel" onClick={onEditCancel}>Cancel</button>
+              <button className="cv-edit-send" onClick={e => {
+                const ta = e.target.closest('.cv-edit-wrap').querySelector('textarea');
+                onEditResend(index, ta.value);
+              }}>
+                <ArrowUp size={14} strokeWidth={2.5} /> Resend
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
     return (
-      <div className="cv-msg cv-user">
+      <div className="cv-msg cv-user"
+        onMouseDown={!isStreaming ? onPressStart : undefined}
+        onMouseUp={onPressEnd}
+        onTouchStart={!isStreaming ? onPressStart : undefined}
+        onTouchEnd={onPressEnd}
+      >
         <div className="cv-msg-body cv-user-body" dangerouslySetInnerHTML={{ __html: marked.parse(msg.content || '') }} />
       </div>
     );
