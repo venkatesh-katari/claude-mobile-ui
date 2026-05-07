@@ -420,7 +420,7 @@ app.post('/api/chat', (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
-  const args = ['-p', '--output-format', 'stream-json', '--verbose'];
+  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
 
   // Add permission mode if specified
   const validModes = ['default', 'plan', 'acceptEdits', 'auto', 'bypassPermissions'];
@@ -464,6 +464,7 @@ app.post('/api/chat', (req, res) => {
 
   let buffer = '';
   let titleSaved = false;
+  let hasStreamedText = false; // true once we've forwarded any text_delta events
 
   claudeProcess.stdout.on('data', (chunk) => {
     buffer += chunk.toString();
@@ -475,7 +476,26 @@ app.post('/api/chat', (req, res) => {
       if (!line) continue;
       try {
         const obj = JSON.parse(line);
-        if (obj.type === 'assistant' || obj.type === 'result') {
+        if (obj.type === 'stream_event') {
+          // --include-partial-messages emits raw API stream events; extract text deltas
+          const ev = obj.event;
+          if (ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta' && ev.delta?.text) {
+            hasStreamedText = true;
+            emitEvent({ type: 'assistant', message: { content: [{ type: 'text', text: ev.delta.text }] } });
+          }
+        } else if (obj.type === 'assistant') {
+          if (hasStreamedText) {
+            // Text was already sent as deltas — only forward tool_use blocks to avoid duplicating text
+            const content = obj.message?.content || [];
+            const toolBlocks = content.filter(b => b.type === 'tool_use');
+            if (toolBlocks.length > 0) {
+              emitEvent({ ...obj, message: { ...obj.message, content: toolBlocks } });
+            }
+            hasStreamedText = false; // reset for the next assistant turn
+          } else {
+            emitEvent(obj);
+          }
+        } else if (obj.type === 'result') {
           emitEvent(obj);
         }
         // Auto-title: once we get a session_id from the result, write the first
