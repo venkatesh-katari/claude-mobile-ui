@@ -4,7 +4,8 @@ import hljs from 'highlight.js';
 import {
   ArrowLeft, FolderOpen, MoreHorizontal, Mic, MicOff, ArrowUp,
   FileText, FilePen, Terminal, Search, Globe, List, BookOpen,
-  Wrench, Sun, Moon, Download, Check, ChevronDown, ChevronUp, Copy
+  Wrench, Sun, Moon, Download, Check, ChevronDown, ChevronUp, Copy,
+  RotateCcw, WifiOff, AlertCircle
 } from 'lucide-react';
 import { copyToClipboard } from '../utils/clipboard';
 import { apiFetch } from '../utils/api';
@@ -119,6 +120,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   const [isStreaming, setIsStreaming] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [inputText, setInputText] = useState('');
+  const [sendError, setSendError] = useState(null); // { text, reason }
   const [showExplorer, setShowExplorer] = useState(false);
   const [expandedPaths, setExpandedPaths] = useState(() => new Set());
   const [isNewChat, setIsNewChat] = useState(!sessionId);
@@ -289,14 +291,20 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
     }
   }
 
-  const sendMessage = useCallback(async () => {
-    const text = inputText.trim();
+  const sendMessage = useCallback(async (overrideText) => {
+    const text = (overrideText ?? inputText).trim();
     if (!text || isStreaming) return;
 
     setInputText('');
+    setSendError(null);
     setIsNewChat(false);
     assistantTextRef.current = '';
-    setMessages(prev => [...prev, { role: 'user', content: text }]);
+    setMessages(prev => {
+      // Avoid duplicating the user message when retrying
+      const last = prev[prev.length - 1];
+      if (last?.role === 'user' && last.content === text) return prev;
+      return [...prev, { role: 'user', content: text }];
+    });
     setIsStreaming(true);
 
     try {
@@ -310,7 +318,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
 
       if (res.status === 429) {
         const data = await res.json();
-        setMessages(prev => [...prev, { role: 'assistant', parts: [{ type: 'text', text: `**${data.error}**` }] }]);
+        setSendError({ text, reason: 'Claude is busy — try again shortly' });
         setIsStreaming(false);
         return;
       }
@@ -318,7 +326,8 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
       await consumeSSEStream(res);
     } catch (err) {
       if (err.name !== 'AbortError') {
-        setMessages(prev => [...prev, { role: 'assistant', parts: [{ type: 'text', text: `**Error:** ${err.message}` }] }]);
+        const isNetwork = err.message === 'Failed to fetch' || err.name === 'TypeError';
+        setSendError({ text, reason: isNetwork ? 'Network error' : err.message });
       }
       setIsStreaming(false);
       assistantTextRef.current = '';
@@ -407,7 +416,22 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
         ) : loadingMessages ? (
           <MessageSkeleton />
         ) : (
-          messages.map((msg, i) => <MessageBubble key={i} msg={msg} />)
+          <>
+            {messages.map((msg, i) => <MessageBubble key={i} msg={msg} />)}
+            {sendError && (
+              <div className="cv-send-error">
+                <WifiOff size={13} className="cv-send-error-icon" />
+                <span className="cv-send-error-reason">{sendError.reason}</span>
+                <button
+                  className="cv-retry-btn"
+                  onClick={() => sendMessage(sendError.text)}
+                >
+                  <RotateCcw size={12} />
+                  Retry
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -427,6 +451,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
           value={inputText}
           onChange={e => {
             setInputText(e.target.value);
+            if (sendError) setSendError(null);
             e.target.style.height = 'auto';
             e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
           }}
