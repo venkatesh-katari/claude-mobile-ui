@@ -7,7 +7,7 @@
     "dev": "concurrently \"node --watch server.js\" \"vite\"",
     "build": "vite build",
     "start": "vite build && node server.js",
-    "start:awake": "vite build && caffeinate -dims node server.js",
+    "start:awake": "vite build && caffeinate -ims node server.js",
     "server": "node server.js",
     "stop": "pkill -f 'caffeinate.*node server.js'; pkill -f 'node server.js'"
   },

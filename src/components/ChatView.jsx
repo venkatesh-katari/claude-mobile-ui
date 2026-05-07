@@ -134,6 +134,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   const [showHistory, setShowHistory] = useState(false);
   const [editingMsg, setEditingMsg] = useState(null); // { index, text }
   const [showAtPicker, setShowAtPicker] = useState(false);
+  const [resumablePid, setResumablePid] = useState(null); // pid of a dropped-but-still-running stream
   const chatRef = useRef(null);
   const inputRef = useRef(null);
   const containerRef = useRef(null);
@@ -224,10 +225,24 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
     };
   }, []);
 
+  // Auto-reconnect when phone wakes up and a stream was in progress
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState !== 'visible') return;
+      const pid = sessionStorage.getItem(ACTIVE_PROCESS_KEY) || resumablePid;
+      if (!pid || isStreaming) return;
+      setResumablePid(null);
+      reconnectToStream(pid);
+    }
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [resumablePid, isStreaming]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function consumeSSEStream(res) {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let streamDone = false;
 
     try {
       while (true) {
@@ -297,6 +312,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
               }
               setActiveToolStatus(null);
             } else if (obj.type === 'done') {
+              streamDone = true;
               setActiveToolStatus(null);
               setMessages(prev => {
                 const updated = [...prev];
@@ -310,6 +326,11 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
         }
       }
     } finally {
+      // If the stream closed without a done event, the server process may still be running.
+      // Save the pid so the user can resume instead of retrying.
+      if (!streamDone && processIdRef.current && abortRef.current && !abortRef.current.signal.aborted) {
+        setResumablePid(processIdRef.current);
+      }
       setIsStreaming(false);
       setActiveToolStatus(null);
       assistantTextRef.current = '';
@@ -347,6 +368,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
 
     setInputText('');
     setSendError(null);
+    setResumablePid(null);
     setIsNewChat(false);
     setAtBottom(true);
     assistantTextRef.current = '';
@@ -560,7 +582,21 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
                   onEditResend={handleEditResend}
                 />
               ))}
-              {sendError && (
+              {resumablePid && !isStreaming && (
+                <div className="cv-send-error cv-resume-banner">
+                  <WifiOff size={13} className="cv-send-error-icon" />
+                  <span className="cv-send-error-reason">Connection dropped</span>
+                  <button className="cv-retry-btn" onClick={() => {
+                    const pid = resumablePid;
+                    setResumablePid(null);
+                    reconnectToStream(pid);
+                  }}>
+                    <RotateCcw size={12} />
+                    Resume
+                  </button>
+                </div>
+              )}
+              {sendError && !resumablePid && (
                 <div className="cv-send-error">
                   <WifiOff size={13} className="cv-send-error-icon" />
                   <span className="cv-send-error-reason">{sendError.reason}</span>
