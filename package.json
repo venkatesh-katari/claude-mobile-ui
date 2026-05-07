@@ -1,0 +1,27 @@
+{
+  "name": "claude-mobile-ui",
+  "version": "2.0.0",
+  "description": "Mobile-friendly web UI for Claude Code CLI",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"node --watch server.js\" \"vite\"",
+    "build": "vite build",
+    "start": "vite build && node server.js",
+    "start:awake": "vite build && caffeinate -dims node server.js",
+    "server": "node server.js",
+    "stop": "pkill -f 'caffeinate.*node server.js'; pkill -f 'node server.js'"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "highlight.js": "^11.10.0",
+    "lucide-react": "^1.14.0",
+    "marked": "^15.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.0",
+    "concurrently": "^9.0.0",
+    "vite": "^6.0.0"
+  }
+}

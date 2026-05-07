@@ -1,0 +1,158 @@
+/* Overlay */
+.exp-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(3px);
+}
+
+/* Sidebar panel */
+.exp-sidebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 85%;
+  max-width: 340px;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  animation: exp-slide-in 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.25);
+}
+@keyframes exp-slide-in {
+  from { transform: translateX(-100%); opacity: 0.8; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* Header */
+.exp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: calc(var(--safe-top) + 12px) 14px 12px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.exp-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.exp-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Unified icon button for header actions */
+.exp-icon-btn {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.exp-icon-btn:hover { background: var(--bg-hover); color: var(--text); border-color: var(--border); }
+.exp-icon-btn.active { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+.exp-close-btn:hover { color: var(--text); }
+
+/* Tree */
+.exp-tree {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 6px 0 16px;
+}
+
+/* Row */
+.exp-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  cursor: pointer;
+  transition: background 0.1s;
+  min-height: 34px;
+  position: relative;
+}
+.exp-row:hover { background: var(--bg-hover); }
+.exp-row:active { background: var(--border); }
+
+.exp-icon {
+  flex-shrink: 0;
+  width: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Folder icons — neutral color, slightly warmer */
+.exp-folder .exp-icon { color: #a0a0b8; }
+
+/* File icons — color-coded by type */
+.exp-file .exp-icon { color: var(--text-dim); }
+
+/* Specific file type colors */
+.exp-file[data-ext="md"] .exp-icon,
+.exp-file[data-ext="txt"] .exp-icon { color: #7dd3fc; }
+
+.exp-name {
+  font-size: 13px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.exp-folder .exp-name {
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* + path button */
+.exp-copy {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.exp-row:hover .exp-copy { opacity: 1; }
+@media (hover: none) {
+  .exp-copy { opacity: 0.5; }
+}
+.exp-copy:hover {
+  background: var(--bg-input);
+  border-color: var(--border);
+  color: var(--accent);
+}
+.exp-copy.copied {
+  color: var(--success);
+  opacity: 1;
+}
+
+/* Loading */
+.exp-loading {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 6px 8px;
+  opacity: 0.6;
+}

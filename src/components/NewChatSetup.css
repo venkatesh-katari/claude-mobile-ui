@@ -1,0 +1,77 @@
+.ncs-section { padding: 16px; }
+.ncs-title { font-size: 18px; margin-bottom: 16px; color: var(--text); }
+.ncs-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+.ncs-select {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-family: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+  outline: none;
+  margin-bottom: 16px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239494a8' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+}
+.ncs-select:focus { border-color: var(--accent); }
+.ncs-select option {
+  background: var(--bg-card);
+  color: var(--text);
+}
+.ncs-hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: -10px;
+  margin-bottom: 16px;
+  line-height: 1.4;
+}
+.ncs-summary {
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--bg-input);
+  padding: 6px 10px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ncs-ready { color: var(--accent); font-weight: 500; }
+.ncs-footer { font-size: 13px; color: var(--text-dim); margin-top: 8px; }
+
+.ncs-notif-btn {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px dashed var(--border);
+  color: var(--text-dim);
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  margin-bottom: 16px;
+  font-family: inherit;
+  transition: background 0.15s, border-color 0.15s;
+}
+.ncs-notif-btn:hover { background: var(--bg-hover); border-color: var(--accent); color: var(--text); }
+.ncs-notif-status {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+.ncs-notif-on { color: var(--success); background: rgba(74, 222, 128, 0.08); }
+.ncs-notif-off { color: var(--text-dim); background: var(--bg-input); }

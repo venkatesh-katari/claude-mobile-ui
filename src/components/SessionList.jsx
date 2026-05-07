@@ -1,0 +1,287 @@
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Plus, Sun, Moon, Search, ChevronDown, Pencil } from 'lucide-react';
+import { apiFetch } from '../utils/api';
+import { useStatus } from '../utils/useStatus';
+import './SessionList.css';
+
+function formatDate(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  const diff = Date.now() - d;
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  if (diff < 604800000) return `${Math.floor(diff / 86400000)}d ago`;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function RenameInput({ value, sessionId, onDone }) {
+  const [text, setText] = useState(value);
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    const trimmed = text.trim();
+    if (!trimmed || trimmed === value) { onDone(value); return; }
+    setSaving(true);
+    try {
+      await apiFetch(`/api/sessions/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ summary: trimmed }),
+      });
+      onDone(trimmed);
+    } catch {
+      onDone(value);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <input
+      className="sl-rename-input"
+      value={text}
+      autoFocus
+      disabled={saving}
+      onChange={e => setText(e.target.value)}
+      onBlur={save}
+      onKeyDown={e => {
+        if (e.key === 'Enter') { e.preventDefault(); save(); }
+        if (e.key === 'Escape') { e.preventDefault(); onDone(value); }
+      }}
+      onClick={e => e.stopPropagation()}
+    />
+  );
+}
+
+function SessionCard({ session, projectId, onOpen, onRename, renamingId, onRenameComplete }) {
+  const isRenaming = renamingId === session.sessionId;
+  const displayTitle = session.summary && session.summary !== '(no title)'
+    ? session.summary
+    : null;
+
+  return (
+    <div
+      className="sl-session-card"
+      onClick={() => !isRenaming && onOpen(session.sessionId, session.projectPath, projectId, session.summary)}
+    >
+      <div className="sl-session-title-row">
+        {isRenaming ? (
+          <RenameInput
+            value={session.summary}
+            sessionId={session.sessionId}
+            onDone={(title) => onRenameComplete(projectId, session.sessionId, title)}
+          />
+        ) : (
+          <>
+            <span className={`sl-session-title ${!displayTitle ? 'sl-session-title-empty' : ''}`}>
+              {displayTitle || 'Untitled session'}
+            </span>
+            <button
+              className="sl-rename-btn"
+              title="Rename"
+              onClick={e => { e.stopPropagation(); onRename(session.sessionId); }}
+            >
+              <Pencil size={12} />
+            </button>
+          </>
+        )}
+      </div>
+      <div className="sl-session-meta">
+        <span>{session.gitBranch || formatDate(session.modified || session.created)}</span>
+        {session.gitBranch && <span>{formatDate(session.modified || session.created)}</span>}
+      </div>
+    </div>
+  );
+}
+
+export default function SessionList({ onOpenSession, onNewChat, theme, onToggleTheme }) {
+  const [projects, setProjects] = useState([]);
+  const [expanded, setExpanded] = useState(new Set());
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [renamingId, setRenamingId] = useState(null);
+  const status = useStatus();
+
+  useEffect(() => { loadProjects(); }, []);
+
+  async function loadProjects() {
+    try {
+      const res = await apiFetch('/api/projects');
+      const projs = await res.json();
+      const loaded = [];
+      for (const proj of projs) {
+        const sessRes = await apiFetch(`/api/projects/${encodeURIComponent(proj.id)}/sessions`);
+        const sessions = await sessRes.json();
+        if (sessions.length === 0) continue;
+        loaded.push({ ...proj, sessions });
+      }
+      setProjects(loaded);
+
+      // Auto-expand the most recently modified project
+      if (loaded.length > 0) {
+        const mostRecent = loaded.reduce((best, p) => {
+          const t = new Date(p.sessions[0]?.modified || 0);
+          return t > new Date(best.sessions[0]?.modified || 0) ? p : best;
+        });
+        setExpanded(new Set([mostRecent.id]));
+      }
+    } catch (err) {
+      console.error('Failed to load projects:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function toggleProject(id) {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  const handleRenameComplete = useCallback((projectId, sessionId, newTitle) => {
+    setProjects(prev => prev.map(p =>
+      p.id !== projectId ? p : {
+        ...p,
+        sessions: p.sessions.map(s => s.sessionId === sessionId ? { ...s, summary: newTitle } : s),
+      }
+    ));
+    setRenamingId(null);
+  }, []);
+
+  const totalSessions = useMemo(() => projects.reduce((n, p) => n + p.sessions.length, 0), [projects]);
+  const showSearch = totalSessions >= 10;
+
+  // Flat recent sessions — latest 5 across all projects
+  const recentSessions = useMemo(() => {
+    const all = projects.flatMap(p => p.sessions.map(s => ({ ...s, projectId: p.id })));
+    return all.sort((a, b) => new Date(b.modified || b.created) - new Date(a.modified || a.created)).slice(0, 5);
+  }, [projects]);
+
+  const query = search.toLowerCase().trim();
+  const filtered = query
+    ? projects.map(p => ({ ...p, sessions: p.sessions.filter(s => s.summary.toLowerCase().includes(query)) })).filter(p => p.sessions.length > 0)
+    : projects;
+  const displayExpanded = query ? new Set(filtered.map(p => p.id)) : expanded;
+
+  return (
+    <div className="sl-container">
+      <div className="sl-header">
+        <h1>Claude</h1>
+        <div className="sl-header-actions">
+          <button className="sl-theme-btn" onClick={onToggleTheme} title="Toggle theme">
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          <button className="sl-new-btn" onClick={onNewChat}>
+            <Plus size={14} strokeWidth={2.5} />
+            New chat
+          </button>
+        </div>
+      </div>
+
+      {status.busy && (
+        <div className="sl-busy-banner">
+          ⏳ Claude is busy — {status.activeSessions}/{status.maxSessions} sessions active
+        </div>
+      )}
+
+      {showSearch && (
+        <div className="sl-search-bar">
+          <div className="sl-search-wrap">
+            <Search size={14} className="sl-search-icon" />
+            <input
+              className="sl-search"
+              type="search"
+              placeholder="Search sessions…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="sl-list">
+        {loading && (
+          <div className="sl-empty">
+            <div className="sl-spinner" />
+          </div>
+        )}
+
+        {!loading && filtered.length === 0 && (
+          <div className="sl-empty">
+            <div className="sl-empty-icon">{query ? '🔍' : '💬'}</div>
+            <h2>{query ? 'No results' : 'No sessions yet'}</h2>
+            <p>{query ? `Nothing matched "${search}"` : 'Start your first chat below'}</p>
+            {!query && (
+              <button className="sl-empty-cta" onClick={onNewChat}>+ Start a new chat</button>
+            )}
+          </div>
+        )}
+
+        {/* Recent section — only when not searching */}
+        {!query && !loading && recentSessions.length > 0 && (
+          <div className="sl-recent-section">
+            <div className="sl-section-label">Recent</div>
+            {recentSessions.map(s => (
+              <SessionCard
+                key={s.sessionId}
+                session={s}
+                projectId={s.projectId}
+                onOpen={onOpenSession}
+                onRename={setRenamingId}
+                renamingId={renamingId}
+                onRenameComplete={handleRenameComplete}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* All projects grouped */}
+        {filtered.length > 0 && (
+          <>
+            {!query && <div className="sl-section-label sl-section-label-projects">Projects</div>}
+            {filtered.map(proj => {
+              const pathParts = (proj.originalPath || proj.id).split('/').filter(Boolean);
+              const shortPath = pathParts.slice(-2).join('/');
+              const projectName = pathParts[pathParts.length - 1] || shortPath;
+              const isExpanded = displayExpanded.has(proj.id);
+
+              return (
+                <div key={proj.id} className={`sl-group ${isExpanded ? 'expanded' : ''}`}>
+                  <div className="sl-group-header" onClick={() => toggleProject(proj.id)}>
+                    <div className="sl-group-name-wrap">
+                      <span className="sl-group-name">{projectName}</span>
+                      <span className="sl-group-path">{shortPath}</span>
+                    </div>
+                    <span className="sl-group-meta">
+                      <span className="sl-group-count">{proj.sessions.length}</span>
+                      <ChevronDown size={14} className="sl-chevron" />
+                    </span>
+                  </div>
+
+                  {isExpanded && (
+                    <div className="sl-group-sessions">
+                      {proj.sessions.map(s => (
+                        <SessionCard
+                          key={s.sessionId}
+                          session={s}
+                          projectId={proj.id}
+                          onOpen={onOpenSession}
+                          onRename={setRenamingId}
+                          renamingId={renamingId}
+                          onRenameComplete={handleRenameComplete}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
