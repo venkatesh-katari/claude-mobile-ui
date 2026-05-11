@@ -53,6 +53,7 @@ export default function App() {
     projectId: null,
     title: 'New Chat',
     permissionMode: 'plan',
+    model: 'sonnet',
   });
 
   const openSession = useCallback((sessionId, projectPath, projectId, title) => {
@@ -61,13 +62,14 @@ export default function App() {
   }, []);
 
   const startNewChat = useCallback(() => {
-    setChatState({
+    setChatState(s => ({
       sessionId: null,
       projectPath: null,
       projectId: null,
       title: 'New Chat',
-      permissionMode: 'plan',
-    });
+      permissionMode: s.permissionMode,
+      model: s.model,
+    }));
     setView('chat');
   }, []);
 

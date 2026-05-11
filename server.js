@@ -401,7 +401,7 @@ app.get('/api/files', (req, res) => {
 // API: Send a message (new or continue session) — SSE streaming
 // ============================================================================
 app.post('/api/chat', (req, res) => {
-  const { message, sessionId, projectPath, permissionMode } = req.body;
+  const { message, sessionId, projectPath, permissionMode, model } = req.body;
 
   if (!message) {
     return res.status(400).json({ error: 'message is required' });
@@ -426,6 +426,11 @@ app.post('/api/chat', (req, res) => {
   const validModes = ['default', 'plan', 'acceptEdits', 'auto', 'bypassPermissions'];
   if (permissionMode && validModes.includes(permissionMode)) {
     args.push('--permission-mode', permissionMode);
+  }
+
+  const validModels = ['sonnet', 'opus', 'haiku'];
+  if (model && validModels.includes(model)) {
+    args.push('--model', model);
   }
 
   if (sessionId) {

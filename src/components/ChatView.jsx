@@ -53,16 +53,22 @@ const ACTIVE_PROCESS_KEY = 'claude_mobile_active_process';
 // ============================================================================
 // Overflow menu (⋯)
 // ============================================================================
-function OverflowMenu({ theme, onToggleTheme, onExport, canExport, permissionMode, onPermissionChange }) {
-  const [open, setOpen] = useState(false);
+const MODELS = [
+  { value: 'sonnet', label: 'Sonnet', desc: 'Best balance of speed & quality' },
+  { value: 'opus',   label: 'Opus',   desc: 'Most capable, slower' },
+  { value: 'haiku',  label: 'Haiku',  desc: 'Fastest, lightest tasks' },
+];
 
-  const MODES = [
-    { value: 'plan', label: 'Plan', desc: 'Read-only, no changes' },
-    { value: 'acceptEdits', label: 'Accept Edits', desc: 'Auto-approve file edits' },
-    { value: 'auto', label: 'Auto', desc: 'Approve everything' },
-    { value: 'default', label: 'Default', desc: 'Deny tools needing permission' },
-    { value: 'bypassPermissions', label: 'Bypass', desc: 'Skip all permission checks' },
-  ];
+const MODES = [
+  { value: 'plan',               label: 'Plan',         desc: 'Read-only, no changes' },
+  { value: 'acceptEdits',        label: 'Accept Edits', desc: 'Auto-approve file edits' },
+  { value: 'auto',               label: 'Auto',         desc: 'Approve everything' },
+  { value: 'default',            label: 'Default',      desc: 'Deny tools needing permission' },
+  { value: 'bypassPermissions',  label: 'Bypass',       desc: 'Skip all permission checks' },
+];
+
+function OverflowMenu({ theme, onToggleTheme, onExport, canExport, permissionMode, onPermissionChange, model, onModelChange }) {
+  const [open, setOpen] = useState(false);
 
   return (
     <>
@@ -73,6 +79,21 @@ function OverflowMenu({ theme, onToggleTheme, onExport, canExport, permissionMod
         <div className="cv-menu-overlay" onClick={() => setOpen(false)}>
           <div className="cv-menu-sheet" onClick={e => e.stopPropagation()}>
             <div className="cv-menu-handle" />
+
+            <div className="cv-menu-section-label">Model</div>
+            {MODELS.map(m => (
+              <button
+                key={m.value}
+                className={`cv-menu-item ${model === m.value ? 'active' : ''}`}
+                onClick={() => { onModelChange(m.value); setOpen(false); }}
+              >
+                <span className="cv-menu-item-label">{m.label}</span>
+                <span className="cv-menu-item-desc">{m.desc}</span>
+                {model === m.value && <Check size={14} className="cv-menu-check" />}
+              </button>
+            ))}
+
+            <div className="cv-menu-divider" />
 
             <div className="cv-menu-section-label">Permission Mode</div>
             {MODES.map(m => (
@@ -116,7 +137,7 @@ function OverflowMenu({ theme, onToggleTheme, onExport, canExport, permissionMod
 // Main ChatView
 // ============================================================================
 export default function ChatView({ chatState, onBack, onUpdateState, theme, onToggleTheme }) {
-  const { sessionId, projectPath, title, permissionMode } = chatState;
+  const { sessionId, projectPath, title, permissionMode, model = 'sonnet' } = chatState;
   const [messages, setMessages] = useState([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -398,7 +419,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
       const res = await apiFetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, sessionId, projectPath, permissionMode }),
+        body: JSON.stringify({ message: text, sessionId, projectPath, permissionMode, model }),
         signal: abortRef.current.signal,
       });
 
@@ -429,7 +450,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
       abortRef.current = null;
       sessionStorage.removeItem(ACTIVE_PROCESS_KEY);
     }
-  }, [inputText, isStreaming, sessionId, projectPath, permissionMode, onUpdateState]);
+  }, [inputText, isStreaming, sessionId, projectPath, permissionMode, model, onUpdateState]);
 
   function handleStop() {
     if (processIdRef.current) {
@@ -483,6 +504,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   }
 
   const modeBadgeLabel = { plan: 'Plan', acceptEdits: 'Edits', auto: 'Auto', default: 'Default', bypassPermissions: 'Bypass' };
+  const modelBadgeLabel = { sonnet: 'Sonnet', opus: 'Opus', haiku: 'Haiku' };
 
   const QUICK_PROMPTS = [
     'Review this code', 'Write tests', 'Explain this', 'Fix the bug',
@@ -560,9 +582,8 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
           >
             <FolderOpen size={16} />
           </button>
-          <span className="cv-mode-badge" title="Permission mode">
-            {modeBadgeLabel[permissionMode] || permissionMode}
-          </span>
+          <span className="cv-header-chip">{modelBadgeLabel[model] || model}</span>
+          <span className="cv-header-chip">{modeBadgeLabel[permissionMode] || permissionMode}</span>
           <OverflowMenu
             theme={theme}
             onToggleTheme={onToggleTheme}
@@ -570,6 +591,8 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
             canExport={messages.length > 0}
             permissionMode={permissionMode}
             onPermissionChange={(mode) => onUpdateState({ permissionMode: mode })}
+            model={model}
+            onModelChange={(m) => onUpdateState({ model: m })}
           />
         </div>
       </div>

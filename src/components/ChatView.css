@@ -70,17 +70,19 @@
 .cv-explorer-btn:hover { background: var(--bg-hover); color: var(--text); }
 .cv-explorer-btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
 
-/* Mode badge */
-.cv-mode-badge {
-  font-size: 11px;
+/* Header info chips (model + mode) — display only, not interactive */
+.cv-header-chip {
+  font-size: 10px;
   font-weight: 600;
   color: var(--text-dim);
   background: var(--bg-input);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 3px 7px;
-  cursor: default;
+  border-radius: 20px;
+  padding: 3px 8px;
   white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+  letter-spacing: 0.02em;
 }
 
 /* Overflow ⋯ button */
