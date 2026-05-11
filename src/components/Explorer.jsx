@@ -104,10 +104,11 @@ function FolderNode({ path, name, depth, defaultOpen = false, showHidden, onInse
     try {
       const url = `/api/files?dir=${encodeURIComponent(path)}&hidden=${showHidden}${refresh ? '&refresh=true' : ''}`;
       const res = await apiFetch(url);
+      if (!res.ok) throw new Error(`${res.status}`);
       const data = await res.json();
       setChildren(data);
     } catch {
-      setChildren([]);
+      setChildren(null); // null = error, [] = genuinely empty
     } finally {
       setLoading(false);
     }
@@ -167,7 +168,13 @@ function FolderNode({ path, name, depth, defaultOpen = false, showHidden, onInse
         <div className="exp-loading" style={{ paddingLeft: (depth + 1) * 16 + 8 }}>Loading...</div>
       )}
 
-      {isOpen && children && children.map(entry => (
+      {isOpen && !loading && children === null && (
+        <div className="exp-loading exp-error" style={{ paddingLeft: (depth + 1) * 16 + 8 }}>
+          Failed to load — <button className="exp-retry-link" onClick={() => fetchChildren()}>retry</button>
+        </div>
+      )}
+
+      {isOpen && Array.isArray(children) && children.map(entry => (
         entry.isDir ? (
           <FolderNode
             key={entry.path}

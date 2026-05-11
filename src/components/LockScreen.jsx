@@ -18,7 +18,9 @@ export default function LockScreen({ onUnlock }) {
       const res = await fetch('/api/auth/check', {
         headers: { 'X-Pin': pin.trim() },
       });
-      const data = await res.json();
+
+      let data = {};
+      try { data = await res.json(); } catch {}
 
       if (res.ok && data.ok) {
         setPin(pin.trim());
@@ -26,10 +28,12 @@ export default function LockScreen({ onUnlock }) {
       } else if (res.status === 429) {
         setLocked(true);
         setError(data.error || 'Too many attempts. Try again later.');
-      } else {
+      } else if (res.status === 401) {
         const left = data.attemptsLeft ?? '';
         setError(`Incorrect PIN.${left ? ` ${left} attempt${left === 1 ? '' : 's'} left.` : ''}`);
         setLocalPin('');
+      } else {
+        setError('Could not reach server. Please try again.');
       }
     } catch {
       setError('Could not reach server.');

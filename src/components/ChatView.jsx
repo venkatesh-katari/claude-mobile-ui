@@ -120,6 +120,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   const [messages, setMessages] = useState([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [inputText, setInputText] = useState('');
   const [sendError, setSendError] = useState(null);
   const [showExplorer, setShowExplorer] = useState(false);
@@ -164,12 +165,15 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
 
   async function loadMessages(sid) {
     setLoadingMessages(true);
+    setLoadError(false);
     try {
       const res = await apiFetch(`/api/sessions/${sid}/messages`);
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
       const msgs = await res.json();
       setMessages(msgs);
     } catch (err) {
       console.error('Failed to load messages:', err);
+      setLoadError(true);
     } finally {
       setLoadingMessages(false);
     }
@@ -376,7 +380,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
     if (!overrideText) {
       setPromptHistory(prev => {
         const next = [text, ...prev.filter(p => p !== text)].slice(0, 20);
-        localStorage.setItem('cv_prompt_history', JSON.stringify(next));
+        try { localStorage.setItem('cv_prompt_history', JSON.stringify(next)); } catch {}
         return next;
       });
     }
@@ -399,8 +403,16 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
       });
 
       if (res.status === 429) {
-        const data = await res.json();
+        await res.json();
         setSendError({ text, reason: 'Claude is busy — try again shortly' });
+        setIsStreaming(false);
+        return;
+      }
+
+      if (!res.ok) {
+        let reason = `Server error (${res.status})`;
+        try { const d = await res.json(); if (d.error) reason = d.error; } catch {}
+        setSendError({ text, reason });
         setIsStreaming(false);
         return;
       }
@@ -568,6 +580,22 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
             <NewChatSetup projectPath={projectPath} permissionMode={permissionMode} onUpdateState={onUpdateState} />
           ) : loadingMessages ? (
             <MessageSkeleton />
+          ) : loadError ? (
+            <div className="cv-load-error">
+              <div className="cv-load-error-icon">⚠️</div>
+              <h3 className="cv-load-error-title">Couldn't load this session</h3>
+              <p className="cv-load-error-body">The session file may be missing or corrupted.</p>
+              <div className="cv-load-error-actions">
+                <button className="cv-load-error-retry" onClick={() => loadMessages(sessionId)}>
+                  <RotateCcw size={14} />
+                  Retry
+                </button>
+                <button className="cv-load-error-back" onClick={handleBack}>
+                  <ArrowLeft size={14} />
+                  Go Back
+                </button>
+              </div>
+            </div>
           ) : (
             <>
               {messages.map((msg, i) => (
@@ -797,13 +825,15 @@ function AtFilePicker({ projectPath, onSelect, onClose }) {
   const [entries, setEntries] = useState([]);
   const [path, setPath] = useState(projectPath || null);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
 
   useEffect(() => {
     setLoading(true);
+    setFetchError(false);
     apiFetch(`/api/files?dir=${encodeURIComponent(path || '')}`)
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error(); return r.json(); })
       .then(data => { setEntries(data); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch(() => { setFetchError(true); setLoading(false); });
   }, [path]);
 
   return (
@@ -821,7 +851,9 @@ function AtFilePicker({ projectPath, onSelect, onClose }) {
           )}
         </div>
         {loading && <p className="cv-history-empty">Loading…</p>}
-        {!loading && entries.map(e => (
+        {!loading && fetchError && <p className="cv-history-empty">Couldn't load files — check server connection.</p>}
+        {!loading && !fetchError && entries.length === 0 && <p className="cv-history-empty">Empty directory</p>}
+        {!loading && !fetchError && entries.map(e => (
           <button key={e.path} className="cv-menu-item" onClick={() => {
             if (e.isDir) setPath(e.path);
             else onSelect(e.path);

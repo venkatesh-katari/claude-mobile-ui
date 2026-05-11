@@ -105,6 +105,7 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
   const [projects, setProjects] = useState([]);
   const [expanded, setExpanded] = useState(new Set());
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [search, setSearch] = useState('');
   const [renamingId, setRenamingId] = useState(null);
   const [activeSessionIds, setActiveSessionIds] = useState(new Set());
@@ -117,7 +118,7 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
   useEffect(() => {
     function fetchActive() {
       apiFetch('/api/sessions/active')
-        .then(r => r.json())
+        .then(r => r.ok ? r.json() : Promise.reject())
         .then(ids => setActiveSessionIds(new Set(ids)))
         .catch(() => {});
     }
@@ -127,12 +128,15 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
   }, []);
 
   async function loadProjects() {
+    setLoadError(false);
     try {
       const res = await apiFetch('/api/projects');
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
       const projs = await res.json();
       const loaded = [];
       for (const proj of projs) {
         const sessRes = await apiFetch(`/api/projects/${encodeURIComponent(proj.id)}/sessions`);
+        if (!sessRes.ok) continue; // skip broken project, keep loading others
         const sessions = await sessRes.json();
         if (sessions.length === 0) continue;
         loaded.push({ ...proj, sessions });
@@ -149,6 +153,7 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
       }
     } catch (err) {
       console.error('Failed to load projects:', err);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -211,7 +216,14 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
             <button
               className="sl-conflict-btn sl-conflict-takeover"
               onClick={async () => {
-                await apiFetch(`/api/sessions/${conflictSession.sessionId}/takeover`, { method: 'POST' });
+                try {
+                  const res = await apiFetch(`/api/sessions/${conflictSession.sessionId}/takeover`, { method: 'POST' });
+                  if (!res.ok) throw new Error();
+                } catch {
+                  // Takeover failed — don't open; show the sheet again with updated state
+                  setConflictSession(null);
+                  return;
+                }
                 setActiveSessionIds(prev => { const n = new Set(prev); n.delete(conflictSession.sessionId); return n; });
                 onOpenSession(conflictSession.sessionId, conflictSession.projectPath, conflictSession.projectId, conflictSession.summary);
                 setConflictSession(null);
@@ -279,7 +291,16 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
           </div>
         )}
 
-        {!loading && filtered.length === 0 && (
+        {!loading && loadError && (
+          <div className="sl-empty">
+            <div className="sl-empty-icon">⚠️</div>
+            <h2>Couldn't load sessions</h2>
+            <p>Check that the server is running and try again.</p>
+            <button className="sl-empty-cta" onClick={loadProjects}>Retry</button>
+          </div>
+        )}
+
+        {!loading && !loadError && filtered.length === 0 && (
           <div className="sl-empty">
             <div className="sl-empty-icon">{query ? '🔍' : '💬'}</div>
             <h2>{query ? 'No results' : 'No sessions yet'}</h2>

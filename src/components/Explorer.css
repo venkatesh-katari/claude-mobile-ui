@@ -156,3 +156,14 @@
   padding: 6px 8px;
   opacity: 0.6;
 }
+.exp-error { color: var(--error); opacity: 1; }
+.exp-retry-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}

@@ -772,6 +772,52 @@
 .cv-send:disabled { opacity: 0.35; cursor: not-allowed; }
 .cv-send:not(:disabled):active { opacity: 0.8; transform: scale(0.93); }
 
+/* ── Session load error ───────────────────────────────────── */
+.cv-load-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 300px;
+  text-align: center;
+  padding: 32px 24px;
+  gap: 8px;
+}
+.cv-load-error-icon { font-size: 40px; margin-bottom: 4px; }
+.cv-load-error-title { font-size: 17px; font-weight: 600; color: var(--text); margin: 0; }
+.cv-load-error-body { font-size: 14px; color: var(--text-dim); margin: 0; line-height: 1.5; }
+.cv-load-error-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+.cv-load-error-retry,
+.cv-load-error-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.cv-load-error-retry {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+}
+.cv-load-error-back {
+  background: none;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.cv-load-error-retry:hover,
+.cv-load-error-back:hover { opacity: 0.8; }
+
 /* ── Loading skeleton ─────────────────────────────────────── */
 .cv-skeleton-wrap { padding: 8px 0; }
 .cv-skeleton-msg {

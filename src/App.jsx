@@ -5,8 +5,10 @@ import LockScreen from './components/LockScreen';
 import { getPin, clearPin, apiFetch } from './utils/api';
 
 function getInitialTheme() {
-  const saved = localStorage.getItem('theme');
-  if (saved) return saved;
+  try {
+    const saved = localStorage.getItem('theme');
+    if (saved) return saved;
+  } catch {}
   return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 
@@ -16,7 +18,7 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('theme', theme);
+    try { localStorage.setItem('theme', theme); } catch {}
   }, [theme]);
 
   // On mount, verify whether PIN is required and if we already have a valid one

@@ -39,7 +39,7 @@ export default function NewChatSetup({ projectPath, permissionMode, onUpdateStat
 
   useEffect(() => {
     apiFetch('/api/directories')
-      .then(r => r.json())
+      .then(r => r.ok ? r.json() : Promise.reject())
       .then(setDirs)
       .catch(() => {});
   }, []);
