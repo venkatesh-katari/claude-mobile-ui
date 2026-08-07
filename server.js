@@ -1,5 +1,5 @@
 import express from 'express';
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 import { readFileSync, writeFileSync, readdirSync, existsSync, createReadStream, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir, networkInterfaces } from 'node:os';
@@ -119,9 +119,9 @@ function getProjectInfo(dirName) {
     } catch {}
   }
 
-  // Derive originalPath from dir name if not in index
+  // Derive originalPath from a real session's cwd if not in index
   if (!originalPath) {
-    originalPath = dirName.replace(/^-/, '/').replace(/-/g, '/');
+    originalPath = deriveCwdFromProjectDir(projectDir, dirName);
   }
 
   return { id: dirName, originalPath, sessionCount };
@@ -192,7 +192,7 @@ app.get('/api/projects/:projectId/sessions', (req, res) => {
             created: stat.birthtime.toISOString(),
             modified: stat.mtime.toISOString(),
             gitBranch: '',
-            projectPath: originalPath || req.params.projectId.replace(/^-/, '/').replace(/-/g, '/'),
+            projectPath: originalPath || deriveCwdFromProjectDir(projectDir, req.params.projectId),
           });
         } catch {}
       }
@@ -313,7 +313,7 @@ app.get('/api/directories', (_req, res) => {
         }
         // Decode directory name back to path if no originalPath
         if (!originalPath) {
-          originalPath = '/' + d.name.replaceAll('-', '/');
+          originalPath = deriveCwdFromProjectDir(join(CLAUDE_PROJECTS_DIR, d.name), d.name);
         }
         return originalPath;
       })
@@ -413,6 +413,118 @@ app.get('/api/files', (req, res) => {
     const showHidden = req.query.hidden === 'true';
     const bust = req.query.refresh === 'true';
     res.json(readDirCached(dir, showHidden, bust));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================================
+// API: Enumerate skills + commands for the "/" picker
+// ============================================================================
+
+function parseFrontmatter(content) {
+  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return {};
+  const fm = {};
+  const lines = match[1].split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^([a-zA-Z0-9_-]+):\s*(.*)$/);
+    if (!m) continue;
+    let val = m[2].trim();
+    if (val === '|' || val === '>') {
+      // YAML block scalar: consume subsequent indented lines
+      const blockLines = [];
+      while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) {
+        i++;
+        blockLines.push(lines[i].replace(/^\s\s/, ''));
+      }
+      val = blockLines.join(val === '|' ? '\n' : ' ').trim();
+    } else if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    fm[m[1]] = val;
+  }
+  return fm;
+}
+
+function listSkillsInDir(dir, prefix) {
+  if (!existsSync(dir)) return [];
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const skillFile = join(dir, entry.name, 'SKILL.md');
+    if (!existsSync(skillFile)) continue;
+    try {
+      const fm = parseFrontmatter(readFileSync(skillFile, 'utf-8'));
+      const name = fm.name || entry.name;
+      out.push({
+        invoke: prefix ? `${prefix}:${name}` : name,
+        name,
+        description: fm.description || '',
+      });
+    } catch { /* skip unreadable/malformed skill */ }
+  }
+  return out;
+}
+
+function listCommandsInDir(dir, prefix) {
+  if (!existsSync(dir)) return [];
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    const name = entry.name.slice(0, -3);
+    try {
+      const fm = parseFrontmatter(readFileSync(join(dir, entry.name), 'utf-8'));
+      if (fm['hide-from-slash-command-tool'] === 'true') continue;
+      out.push({
+        invoke: prefix ? `${prefix}:${name}` : name,
+        name,
+        description: fm.description || '',
+        argumentHint: fm['argument-hint'] || '',
+      });
+    } catch { /* skip unreadable/malformed command */ }
+  }
+  return out;
+}
+
+let pluginListCache = null;
+let pluginListCacheTs = 0;
+const PLUGIN_LIST_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+function getEnabledPlugins() {
+  const now = Date.now();
+  if (pluginListCache && now - pluginListCacheTs < PLUGIN_LIST_CACHE_TTL) return pluginListCache;
+  try {
+    const out = execSync('claude plugin list --json', { encoding: 'utf-8', timeout: 5000 });
+    const list = JSON.parse(out);
+    pluginListCache = list.filter(p => p.enabled);
+    pluginListCacheTs = now;
+  } catch {
+    pluginListCache = pluginListCache || [];
+  }
+  return pluginListCache;
+}
+
+app.get('/api/slash-items', (req, res) => {
+  try {
+    const projectPath = req.query.projectPath || '';
+    const skills = [];
+    const commands = [];
+
+    if (projectPath) {
+      skills.push(...listSkillsInDir(join(projectPath, '.claude', 'skills'), ''));
+      commands.push(...listCommandsInDir(join(projectPath, '.claude', 'commands'), ''));
+    }
+    skills.push(...listSkillsInDir(join(homedir(), '.claude', 'skills'), ''));
+    commands.push(...listCommandsInDir(join(homedir(), '.claude', 'commands'), ''));
+
+    for (const plugin of getEnabledPlugins()) {
+      const pluginName = plugin.id.split('@')[0];
+      skills.push(...listSkillsInDir(join(plugin.installPath, 'skills'), pluginName));
+      commands.push(...listCommandsInDir(join(plugin.installPath, 'commands'), pluginName));
+    }
+
+    res.json({ skills, commands });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -753,6 +865,26 @@ function deriveSessionSummary(filePath) {
 
   const summary = aiTitle || firstPrompt || '(no title)';
   return { summary, firstPrompt, messageCount };
+}
+
+// Dash-decoding a project dir name back to a path is ambiguous for any real
+// path containing a literal dash (e.g. this repo: claude-mobile-ui decodes
+// to claude/mobile/ui). Session JSONL lines carry an accurate `cwd` field —
+// prefer that, and only fall back to dash-decoding if no session has one.
+function deriveCwdFromProjectDir(projectDir, dirName) {
+  try {
+    const jsonlFiles = readdirSync(projectDir).filter(f => f.endsWith('.jsonl'));
+    for (const file of jsonlFiles) {
+      const content = readFileSync(join(projectDir, file), 'utf-8');
+      for (const line of content.split('\n')) {
+        if (!line.trim()) continue;
+        let obj;
+        try { obj = JSON.parse(line); } catch { continue; }
+        if (obj.cwd) return obj.cwd;
+      }
+    }
+  } catch {}
+  return dirName.replace(/^-/, '/').replace(/-/g, '/');
 }
 
 function titleOverridesPath(projectDir) {

@@ -7,7 +7,7 @@ import {
   FileText, FilePen, Terminal, Search, Globe, List, BookOpen,
   Wrench, Sun, Moon, Download, Check, ChevronDown, ChevronUp, Copy,
   RotateCcw, WifiOff, Square, ArrowDown, Clock, Pencil, AtSign,
-  DollarSign, X, History
+  DollarSign, X, History, Slash, Sparkles
 } from 'lucide-react';
 import { copyToClipboard } from '../utils/clipboard';
 import { apiFetch } from '../utils/api';
@@ -157,6 +157,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   const [showHistory, setShowHistory] = useState(false);
   const [editingMsg, setEditingMsg] = useState(null); // { index, text }
   const [showAtPicker, setShowAtPicker] = useState(false);
+  const [showSlashPicker, setShowSlashPicker] = useState(false);
   const [resumablePid, setResumablePid] = useState(null); // pid of a dropped-but-still-running stream
   const chatRef = useRef(null);
   const inputRef = useRef(null);
@@ -563,6 +564,22 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
         />
       )}
 
+      {/* / skill+command picker bottom sheet */}
+      {showSlashPicker && (
+        <SlashPicker
+          projectPath={projectPath}
+          onSelect={(invoke) => {
+            setInputText(prev => {
+              const idx = prev.lastIndexOf('/');
+              return (idx >= 0 ? prev.slice(0, idx) : prev) + '/' + invoke + ' ';
+            });
+            setShowSlashPicker(false);
+            setTimeout(() => inputRef.current?.focus(), 50);
+          }}
+          onClose={() => setShowSlashPicker(false)}
+        />
+      )}
+
       <div className="cv-header">
         <button className="cv-back" onClick={handleBack}>
           <ArrowLeft size={18} />
@@ -716,6 +733,16 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
         >
           <AtSign size={16} />
         </button>
+        <button
+          className="cv-input-action-btn"
+          onClick={() => {
+            setInputText(prev => (prev ? prev : '') + '/');
+            setShowSlashPicker(true);
+          }}
+          title="Skills & commands"
+        >
+          <Slash size={16} />
+        </button>
         <textarea
           ref={inputRef}
           className="cv-input"
@@ -728,6 +755,9 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
             if (sendError) setSendError(null);
             // Open @ picker when @ is typed
             if (val.endsWith('@')) setShowAtPicker(true);
+            // Open / picker only when / is the very first character (slash-command position)
+            if (val === '/') setShowSlashPicker(true);
+            else if (!val.startsWith('/')) setShowSlashPicker(false);
             e.target.style.height = 'auto';
             e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
           }}
@@ -952,6 +982,61 @@ function AtFilePicker({ projectPath, onSelect, onClose }) {
             <span className="cv-menu-icon" style={{ fontSize: 14 }}>{e.isDir ? '📁' : '📄'}</span>
             <span className="cv-menu-item-label">{e.name}</span>
             {!e.isDir && <span className="cv-menu-item-desc" style={{ fontSize: 11 }}>{e.name.split('.').pop()}</span>}
+          </button>
+        ))}
+        <button className="cv-menu-cancel" onClick={onClose}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// / skill+command picker bottom sheet
+// ============================================================================
+function SlashPicker({ projectPath, onSelect, onClose }) {
+  const [tab, setTab] = useState('skills');
+  const [items, setItems] = useState({ skills: [], commands: [] });
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
+  const [filter, setFilter] = useState('');
+
+  useEffect(() => {
+    apiFetch(`/api/slash-items?projectPath=${encodeURIComponent(projectPath || '')}`)
+      .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+      .then(data => { setItems(data); setLoading(false); })
+      .catch(() => { setFetchError(true); setLoading(false); });
+  }, [projectPath]);
+
+  const list = (items[tab] || []).filter(it =>
+    !filter || it.invoke.toLowerCase().includes(filter.toLowerCase()) || it.description.toLowerCase().includes(filter.toLowerCase())
+  );
+
+  return (
+    <div className="cv-menu-overlay" onClick={onClose}>
+      <div className="cv-menu-sheet cv-slash-sheet" onClick={e => e.stopPropagation()}>
+        <div className="cv-menu-handle" />
+        <div className="cv-slash-tabs">
+          <button className={`cv-slash-tab ${tab === 'skills' ? 'active' : ''}`} onClick={() => setTab('skills')}>
+            <Sparkles size={13} /> Skills
+          </button>
+          <button className={`cv-slash-tab ${tab === 'commands' ? 'active' : ''}`} onClick={() => setTab('commands')}>
+            <Slash size={13} /> Commands
+          </button>
+        </div>
+        <input
+          className="cv-slash-filter"
+          placeholder={`Filter ${tab}…`}
+          value={filter}
+          onChange={e => setFilter(e.target.value)}
+          autoFocus
+        />
+        {loading && <p className="cv-history-empty">Loading…</p>}
+        {!loading && fetchError && <p className="cv-history-empty">Couldn't load skills/commands — check server connection.</p>}
+        {!loading && !fetchError && list.length === 0 && <p className="cv-history-empty">No {tab} found</p>}
+        {!loading && !fetchError && list.map(it => (
+          <button key={it.invoke} className="cv-menu-item" onClick={() => onSelect(it.invoke)}>
+            <span className="cv-menu-item-label">/{it.invoke}</span>
+            {it.description && <span className="cv-menu-item-desc cv-slash-desc">{it.description}</span>}
           </button>
         ))}
         <button className="cv-menu-cancel" onClick={onClose}>Cancel</button>

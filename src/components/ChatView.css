@@ -381,6 +381,57 @@
   font-family: inherit;
 }
 
+/* ── / skill+command picker ──────────────────────────────── */
+.cv-slash-sheet {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.cv-slash-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 0 20px 10px;
+}
+.cv-slash-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  padding: 6px 14px;
+  border-radius: 16px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.cv-slash-tab.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.cv-slash-filter {
+  display: block;
+  width: calc(100% - 40px);
+  margin: 0 20px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 14px;
+  color: var(--text);
+  font-family: inherit;
+}
+.cv-slash-filter:focus { outline: none; border-color: var(--accent); }
+.cv-slash-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 45%;
+  flex-shrink: 0;
+}
+
 /* ── Edit message ─────────────────────────────────────────── */
 .cv-edit-wrap {
   width: 100%;

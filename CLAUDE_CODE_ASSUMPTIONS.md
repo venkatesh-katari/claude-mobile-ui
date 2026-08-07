@@ -21,12 +21,19 @@ one line-delimited JSON file per session. `<encoded-cwd>` is the project's
 absolute path with `/` replaced by `-`.
 
 - Code: `server.js` — `CLAUDE_PROJECTS_DIR`, `findSessionFile()`
-- Known drift: the path-encoding scheme naively does `path.replaceAll('-', '/')`
-  to decode a directory name back to a path (`server.js`, `/api/directories`
-  and `getProjectInfo`). This is **already wrong** for any real path that
-  contains a literal dash (e.g. this repo: `claude-mobile-ui` decodes to
-  `claude/mobile/ui`). Not CLI drift, just a pre-existing bug — worth fixing
-  separately, listed here so it isn't mistaken for a new regression.
+- **Fixed (2026-08-07):** the path-encoding scheme used to naively do
+  `path.replaceAll('-', '/')` to decode a directory name back to a path
+  (`server.js`, `/api/directories` and `getProjectInfo`). This was wrong for
+  any real path containing a literal dash (e.g. this repo: `claude-mobile-ui`
+  decoded to `claude/mobile/ui`), which broke `/api/directories`, the
+  session-list fallback `projectPath`, and — surfaced directly by this bug —
+  the `/` picker not finding this repo's own project-level skill, since it
+  was querying the wrong (dash-expanded) directory for `.claude/skills`.
+  Fixed via `deriveCwdFromProjectDir()`, which reads the `cwd` field already
+  present on every JSONL line in a real session file (confirmed present on
+  `attachment`/`user`/`assistant` line types) instead of guessing from the
+  directory name. Dash-decoding is now only a last-resort fallback when a
+  project dir has zero session files to read a `cwd` from.
 
 **If this breaks:** session list appears empty; "Open Project" folder picker
 shows wrong paths.
