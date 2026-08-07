@@ -53,7 +53,7 @@ export default function App() {
     projectId: null,
     title: 'New Chat',
     permissionMode: 'plan',
-    model: 'sonnet',
+    model: 'claude-sonnet-5',
   });
 
   const openSession = useCallback((sessionId, projectPath, projectId, title) => {

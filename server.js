@@ -183,24 +183,11 @@ app.get('/api/projects/:projectId/sessions', (req, res) => {
         const filePath = join(projectDir, file);
         try {
           const stat = statSync(filePath);
-          // Read first line to get a summary
-          const content = readFileSync(filePath, 'utf-8');
-          const firstLine = content.split('\n').find(l => l.trim());
-          let summary = '(no title)';
-          let messageCount = 0;
-          if (firstLine) {
-            try {
-              const msg = JSON.parse(firstLine);
-              if (msg.type === 'human' && msg.message?.content) {
-                summary = msg.message.content.slice(0, 100);
-              }
-            } catch {}
-          }
-          messageCount = content.split('\n').filter(l => l.trim()).length;
+          const { summary, firstPrompt, messageCount } = deriveSessionSummary(filePath);
           entries.push({
             sessionId,
             summary,
-            firstPrompt: summary,
+            firstPrompt: firstPrompt || summary,
             messageCount,
             created: stat.birthtime.toISOString(),
             modified: stat.mtime.toISOString(),
@@ -209,6 +196,13 @@ app.get('/api/projects/:projectId/sessions', (req, res) => {
           });
         } catch {}
       }
+    }
+
+    // Apply locally-saved rename overrides (used when a session has no
+    // sessions-index.json entry to write the rename into directly)
+    const overrides = readTitleOverrides(projectDir);
+    for (const entry of entries) {
+      if (overrides[entry.sessionId]) entry.summary = overrides[entry.sessionId];
     }
 
     entries.sort((a, b) => new Date(b.modified) - new Date(a.modified));
@@ -234,17 +228,44 @@ app.patch('/api/sessions/:sessionId', (req, res) => {
 
     const dirs = readdirSync(CLAUDE_PROJECTS_DIR, { withFileTypes: true }).filter(d => d.isDirectory());
     for (const dir of dirs) {
-      const indexPath = join(CLAUDE_PROJECTS_DIR, dir.name, 'sessions-index.json');
-      if (!existsSync(indexPath)) continue;
-      try {
-        const data = JSON.parse(readFileSync(indexPath, 'utf-8'));
-        const entry = (data.entries || []).find(e => e.sessionId === sessionId);
-        if (entry) {
-          entry.summary = summary.trim();
-          writeFileSync(indexPath, JSON.stringify(data, null, 2), 'utf-8');
-          return res.json({ ok: true });
-        }
-      } catch {}
+      const projectDir = join(CLAUDE_PROJECTS_DIR, dir.name);
+      if (!existsSync(join(projectDir, `${sessionId}.jsonl`))) {
+        // Not in this project at all — but it might still only live in the index
+        const indexPath = join(projectDir, 'sessions-index.json');
+        if (!existsSync(indexPath)) continue;
+        try {
+          const data = JSON.parse(readFileSync(indexPath, 'utf-8'));
+          const entry = (data.entries || []).find(e => e.sessionId === sessionId);
+          if (entry) {
+            entry.summary = summary.trim();
+            writeFileSync(indexPath, JSON.stringify(data, null, 2), 'utf-8');
+            return res.json({ ok: true });
+          }
+        } catch {}
+        continue;
+      }
+
+      // Session's .jsonl lives in this project dir. Prefer updating its
+      // sessions-index.json entry if one exists; otherwise persist the
+      // rename in a local override file, since newer Claude Code CLI
+      // versions don't maintain sessions-index.json at all.
+      const indexPath = join(projectDir, 'sessions-index.json');
+      if (existsSync(indexPath)) {
+        try {
+          const data = JSON.parse(readFileSync(indexPath, 'utf-8'));
+          const entry = (data.entries || []).find(e => e.sessionId === sessionId);
+          if (entry) {
+            entry.summary = summary.trim();
+            writeFileSync(indexPath, JSON.stringify(data, null, 2), 'utf-8');
+            return res.json({ ok: true });
+          }
+        } catch {}
+      }
+
+      const overrides = readTitleOverrides(projectDir);
+      overrides[sessionId] = summary.trim();
+      writeTitleOverrides(projectDir, overrides);
+      return res.json({ ok: true });
     }
     res.status(404).json({ error: 'Session not found' });
   } catch (err) {
@@ -428,7 +449,7 @@ app.post('/api/chat', (req, res) => {
     args.push('--permission-mode', permissionMode);
   }
 
-  const validModels = ['sonnet', 'opus', 'haiku'];
+  const validModels = ['claude-sonnet-5', 'claude-opus-4-8', 'haiku'];
   if (model && validModels.includes(model)) {
     args.push('--model', model);
   }
@@ -441,7 +462,7 @@ app.post('/api/chat', (req, res) => {
   console.log(`[chat] spawning claude with args: ${args.join(' ')}, cwd: ${cwd}`);
   const claudeProcess = spawn('claude', args, {
     cwd,
-    env: { ...process.env },
+    env: { ...process.env, ENABLE_SECURITY_REMINDER: '0' },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   console.log(`[chat] claude process pid: ${claudeProcess.pid}`);
@@ -697,6 +718,59 @@ function findSessionFile(sessionId) {
     }
   }
   return null;
+}
+
+// Extract a display title for a session from its .jsonl: prefer the
+// CLI-generated "ai-title" line, falling back to the first user message.
+// (Newer Claude Code CLI versions don't maintain sessions-index.json, so
+// this is the only source of truth for the title in that case.)
+function deriveSessionSummary(filePath) {
+  const content = readFileSync(filePath, 'utf-8');
+  const lines = content.split('\n').filter(l => l.trim());
+
+  let aiTitle = '';
+  let firstPrompt = '';
+  let messageCount = 0;
+
+  for (const line of lines) {
+    let obj;
+    try { obj = JSON.parse(line); } catch { continue; }
+
+    if (obj.type === 'ai-title' && obj.aiTitle && !aiTitle) {
+      aiTitle = obj.aiTitle;
+    } else if (obj.type === 'user' && !firstPrompt) {
+      const msg = obj.message || {};
+      let text = '';
+      if (typeof msg.content === 'string') {
+        text = msg.content;
+      } else if (Array.isArray(msg.content)) {
+        text = msg.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+      }
+      if (text) firstPrompt = text.trim().slice(0, 100);
+    }
+    if (obj.type === 'user' || obj.type === 'assistant') messageCount++;
+  }
+
+  const summary = aiTitle || firstPrompt || '(no title)';
+  return { summary, firstPrompt, messageCount };
+}
+
+function titleOverridesPath(projectDir) {
+  return join(projectDir, 'title-overrides.json');
+}
+
+function readTitleOverrides(projectDir) {
+  const path = titleOverridesPath(projectDir);
+  if (!existsSync(path)) return {};
+  try {
+    return JSON.parse(readFileSync(path, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function writeTitleOverrides(projectDir, overrides) {
+  writeFileSync(titleOverridesPath(projectDir), JSON.stringify(overrides, null, 2), 'utf-8');
 }
 
 async function parseSessionJsonl(filePath) {

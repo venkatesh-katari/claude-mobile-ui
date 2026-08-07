@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { createPatch } from 'diff';
 import { marked } from 'marked';
 import hljs from 'highlight.js';
 import {
@@ -54,8 +55,8 @@ const ACTIVE_PROCESS_KEY = 'claude_mobile_active_process';
 // Overflow menu (⋯)
 // ============================================================================
 const MODELS = [
-  { value: 'sonnet', label: 'Sonnet', desc: 'Best balance of speed & quality' },
-  { value: 'opus',   label: 'Opus',   desc: 'Most capable, slower' },
+  { value: 'claude-sonnet-5', label: 'Sonnet', desc: 'Best balance of speed & quality' },
+  { value: 'claude-opus-4-8', label: 'Opus', desc: 'Most capable, slower' },
   { value: 'haiku',  label: 'Haiku',  desc: 'Fastest, lightest tasks' },
 ];
 
@@ -137,7 +138,7 @@ function OverflowMenu({ theme, onToggleTheme, onExport, canExport, permissionMod
 // Main ChatView
 // ============================================================================
 export default function ChatView({ chatState, onBack, onUpdateState, theme, onToggleTheme }) {
-  const { sessionId, projectPath, title, permissionMode, model = 'sonnet' } = chatState;
+  const { sessionId, projectPath, title, permissionMode, model = 'claude-sonnet-5' } = chatState;
   const [messages, setMessages] = useState([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -238,9 +239,8 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
     function onResize() {
       const container = containerRef.current;
       if (!container) return;
-      const offset = window.innerHeight - vv.height - vv.offsetTop;
       container.style.height = (vv.height) + 'px';
-      container.style.transform = offset > 0 ? `translateY(-${offset}px)` : '';
+      container.style.transform = vv.offsetTop > 0 ? `translateY(-${vv.offsetTop}px)` : '';
     }
     vv.addEventListener('resize', onResize);
     vv.addEventListener('scroll', onResize);
@@ -842,6 +842,74 @@ function ToolChip({ part }) {
 }
 
 // ============================================================================
+// Diff sheet — "N files changed" summary for Edit/Write tool calls
+// ============================================================================
+function buildDiffBlocks(parts) {
+  const fileMap = new Map(); // path → { oldLines, newLines }
+
+  for (const part of parts) {
+    if (part.type !== 'tool_use') continue;
+
+    if (part.name === 'Edit' && part.input?.file_path) {
+      const p = part.input.file_path;
+      if (!fileMap.has(p)) fileMap.set(p, { old: '', new: '' });
+      const entry = fileMap.get(p);
+      // Chain edits: apply each old→new substitution to running content
+      entry.old += part.input.old_string || '';
+      entry.new += part.input.new_string || '';
+    } else if (part.name === 'Write' && part.input?.file_path) {
+      const p = part.input.file_path;
+      fileMap.set(p, { old: '', new: part.input.content || '' });
+    }
+  }
+
+  return Array.from(fileMap.entries()).map(([filePath, { old: oldStr, new: newStr }]) => {
+    const fileName = filePath.split('/').pop();
+    const patch = createPatch(fileName, oldStr, newStr, '', '', { context: 3 });
+    return { filePath, fileName, patch, isNew: oldStr === '' };
+  });
+}
+
+function DiffLine({ line }) {
+  if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff') || line.startsWith('index') || line.startsWith('\\')) return null;
+  if (line.startsWith('@@')) return <div className="cv-diff-hunk">{line}</div>;
+  if (line.startsWith('+')) return <div className="cv-diff-add">{line}</div>;
+  if (line.startsWith('-')) return <div className="cv-diff-del">{line}</div>;
+  return <div className="cv-diff-ctx">{line}</div>;
+}
+
+function DiffSheet({ parts, onClose }) {
+  const blocks = buildDiffBlocks(parts);
+  if (blocks.length === 0) return null;
+
+  return (
+    <div className="cv-menu-overlay" onClick={onClose}>
+      <div className="cv-diff-sheet" onClick={e => e.stopPropagation()}>
+        <div className="cv-menu-handle" />
+        <div className="cv-diff-header">
+          <span className="cv-diff-title">{blocks.length} file{blocks.length !== 1 ? 's' : ''} changed</span>
+          <button className="cv-diff-close" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="cv-diff-body">
+          {blocks.map(({ filePath, fileName, patch, isNew }) => (
+            <div key={filePath} className="cv-diff-file">
+              <div className="cv-diff-file-header">
+                <span className="cv-diff-file-name">{fileName}</span>
+                {isNew && <span className="cv-diff-new-badge">new</span>}
+                <span className="cv-diff-file-path">{filePath}</span>
+              </div>
+              <div className="cv-diff-code">
+                {patch.split('\n').map((line, i) => <DiffLine key={i} line={line} />)}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
 // @ file picker bottom sheet
 // ============================================================================
 function AtFilePicker({ projectPath, onSelect, onClose }) {
@@ -958,9 +1026,14 @@ function MessageBubble({ msg, index, isStreaming, editingMsg, onEditStart, onEdi
   if (msg.role === 'assistant') {
     const parts = msg.parts || [];
     const hasText = parts.some(p => p.type === 'text');
+    const editParts = parts.filter(p => p.type === 'tool_use' && (p.name === 'Edit' || p.name === 'Write'));
+    const changedFiles = new Set(editParts.map(p => p.input?.file_path).filter(Boolean));
+    const showDiffChip = !msg._streaming && changedFiles.size > 0;
+    const [showDiff, setShowDiff] = useState(false);
 
     return (
       <div className="cv-msg cv-assistant">
+        {showDiff && <DiffSheet parts={parts} onClose={() => setShowDiff(false)} />}
         <div className="cv-assistant-dot" />
         <div className="cv-assistant-content">
           <div className="cv-msg-body cv-assistant-body">
@@ -975,6 +1048,12 @@ function MessageBubble({ msg, index, isStreaming, editingMsg, onEditStart, onEdi
               <button className={`cv-msg-copy ${copied ? 'copied' : ''}`} onClick={handleCopy}>
                 {copied ? <Check size={12} /> : <Copy size={12} />}
                 <span>{copied ? 'Copied' : 'Copy'}</span>
+              </button>
+            )}
+            {showDiffChip && (
+              <button className="cv-diff-chip" onClick={() => setShowDiff(true)}>
+                <FilePen size={11} />
+                {changedFiles.size} file{changedFiles.size !== 1 ? 's' : ''} changed
               </button>
             )}
             {msg.cost && (

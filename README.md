@@ -310,3 +310,13 @@ Anyone opening the URL will be prompted for the PIN. After 5 wrong attempts the 
 - macOS (for `caffeinate`; the server itself runs anywhere Node 18+ is available)
 - Node.js 18+
 - Claude Code CLI (`claude`) installed and authenticated
+
+---
+
+## A note on stability
+
+This app works by reading `claude`'s session files directly and spawning
+`claude -p` under the hood — none of that is a stable, documented API, so it
+can break when the CLI updates. [CLAUDE_CODE_ASSUMPTIONS.md](CLAUDE_CODE_ASSUMPTIONS.md)
+lists every such assumption (file formats, JSONL shapes, CLI flags) along
+with how to re-check each one after a `claude` upgrade.

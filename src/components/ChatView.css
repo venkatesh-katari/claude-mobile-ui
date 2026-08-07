@@ -223,6 +223,7 @@
 /* ── Chat area ────────────────────────────────────────────── */
 .cv-chat {
   flex: 1;
+  overflow-x: hidden;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding: 24px 24px 16px;
@@ -479,8 +480,10 @@
   border: 1px solid var(--user-bubble-border);
   border-radius: 18px 18px 4px 18px;
   padding: 12px 16px;
-  font-size: 16px;
-  line-height: 1.6;
+  font-family: var(--font-claude-response);
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: 1.5;
   max-width: 80%;
   color: var(--user-bubble-text);
 }
@@ -496,8 +499,10 @@
   min-width: 0;
 }
 .cv-assistant-body {
-  font-size: 16px;
-  line-height: 1.75;
+  font-family: var(--font-claude-response);
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: 1.5;
   color: var(--text);
   padding: 0;
 }
@@ -521,6 +526,23 @@
   border-radius: 4px;
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 14px;
+  overflow-wrap: break-word;
+}
+.cv-user-body, .cv-assistant-body { overflow-wrap: break-word; word-break: break-word; }
+.cv-user-body img, .cv-assistant-body img { max-width: 100%; }
+.cv-user-body table, .cv-assistant-body table {
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-collapse: collapse;
+  margin: 8px 0;
+  max-width: 100%;
+}
+.cv-user-body th, .cv-user-body td,
+.cv-assistant-body th, .cv-assistant-body td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  white-space: nowrap;
 }
 
 /* Code blocks */
@@ -773,6 +795,121 @@
 }
 .cv-send:disabled { opacity: 0.35; cursor: not-allowed; }
 .cv-send:not(:disabled):active { opacity: 0.8; transform: scale(0.93); }
+
+/* ── Files changed chip ───────────────────────────────────── */
+.cv-diff-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  padding: 4px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.cv-diff-chip:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+
+/* ── Diff bottom sheet ────────────────────────────────────── */
+.cv-diff-sheet {
+  width: 100%;
+  background: var(--bg-card);
+  border-radius: 20px 20px 0 0;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  max-height: 80vh;
+  box-shadow: 0 -8px 40px rgba(0,0,0,0.3);
+  animation: cv-slide-up 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+.cv-diff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 20px 12px;
+  flex-shrink: 0;
+}
+.cv-diff-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.cv-diff-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+}
+.cv-diff-close:hover { color: var(--text); background: var(--bg-hover); }
+.cv-diff-body {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 0 calc(var(--safe-bottom) + 16px);
+  flex: 1;
+}
+.cv-diff-file {
+  margin-bottom: 16px;
+}
+.cv-diff-file-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.cv-diff-file-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  flex-shrink: 0;
+}
+.cv-diff-file-path {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cv-diff-new-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--success);
+  background: rgba(74, 222, 128, 0.12);
+  border: 1px solid rgba(74, 222, 128, 0.3);
+  border-radius: 4px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+.cv-diff-code {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-x: auto;
+  padding: 8px 0;
+}
+.cv-diff-add, .cv-diff-del, .cv-diff-ctx, .cv-diff-hunk {
+  padding: 0 16px;
+  white-space: pre;
+  min-width: 0;
+}
+.cv-diff-add  { background: rgba(74, 222, 128, 0.1); color: #4ade80; }
+.cv-diff-del  { background: rgba(248, 113, 113, 0.1); color: #f87171; }
+.cv-diff-ctx  { color: var(--text-dim); }
+.cv-diff-hunk { color: var(--accent); opacity: 0.7; padding-top: 4px; }
 
 /* ── Session load error ───────────────────────────────────── */
 .cv-load-error {

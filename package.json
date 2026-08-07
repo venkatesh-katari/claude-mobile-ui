@@ -12,6 +12,7 @@
     "stop": "pkill -f 'caffeinate.*node server.js'; pkill -f 'node server.js'"
   },
   "dependencies": {
+    "diff": "^9.0.0",
     "express": "^4.21.0",
     "highlight.js": "^11.10.0",
     "lucide-react": "^1.14.0",
