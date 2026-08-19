@@ -56,9 +56,17 @@ export default function App() {
     model: 'claude-sonnet-5',
   });
 
+  // A session id found in the URL on load (deep link / refresh) — SessionList
+  // resolves it against the project/session data it fetches anyway, then reports
+  // back via onDeepLinkResolved so we only try once.
+  const [deepLinkSessionId, setDeepLinkSessionId] = useState(
+    () => new URLSearchParams(window.location.search).get('session')
+  );
+
   const openSession = useCallback((sessionId, projectPath, projectId, title) => {
     setChatState(s => ({ ...s, sessionId, projectPath, projectId, title }));
     setView('chat');
+    window.history.replaceState(null, '', `/?session=${encodeURIComponent(sessionId)}`);
   }, []);
 
   const startNewChat = useCallback(() => {
@@ -71,12 +79,24 @@ export default function App() {
       model: s.model,
     }));
     setView('chat');
+    window.history.replaceState(null, '', '/');
   }, []);
 
-  const goBack = useCallback(() => setView('list'), []);
+  const goBack = useCallback(() => {
+    setView('list');
+    window.history.replaceState(null, '', '/');
+  }, []);
 
   const updateChatState = useCallback((updates) => {
     setChatState(s => ({ ...s, ...updates }));
+    if (updates.sessionId) {
+      window.history.replaceState(null, '', `/?session=${encodeURIComponent(updates.sessionId)}`);
+    }
+  }, []);
+
+  const handleDeepLinkResolved = useCallback((found) => {
+    setDeepLinkSessionId(null);
+    if (!found) window.history.replaceState(null, '', '/');
   }, []);
 
   if (authState === 'checking') {
@@ -88,7 +108,16 @@ export default function App() {
   }
 
   if (view === 'list') {
-    return <SessionList onOpenSession={openSession} onNewChat={startNewChat} theme={theme} onToggleTheme={toggleTheme} />;
+    return (
+      <SessionList
+        onOpenSession={openSession}
+        onNewChat={startNewChat}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        autoOpenSessionId={deepLinkSessionId}
+        onDeepLinkResolved={handleDeepLinkResolved}
+      />
+    );
   }
 
   return (

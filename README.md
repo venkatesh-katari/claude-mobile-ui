@@ -29,6 +29,7 @@ Open the Network URL printed in the terminal on your phone.
 | Quick prompt chips | ✅ | ✅ |
 | Edit & resend a message | ✅ | ✅ |
 | @ file mention in input | ✅ | ✅ |
+| / skill & command picker | ✅ | ✅ |
 | Reconnect after phone sleep | ✅ | ✅ |
 | File explorer with preview | ✅ | ✅ |
 | Syntax-highlighted code preview | ✅ | ✅ |
@@ -171,6 +172,10 @@ A scrollable row of common prompts appears above the input bar: `Review this cod
 ### @ File Mention
 
 Tap the **@** button in the input bar (or type `@` in the message field) to open a file browser. Navigate your project directory and tap any file to insert its path at the cursor — no need to open the full file explorer.
+
+### / Skill & Command Picker
+
+Tap the **/** button in the input bar (or type `/` as the first character of the message) to open a picker of available Skills and Commands — the same custom skills/commands you'd see typing `/` in the Claude Code CLI itself. Covers project-level (`.claude/`), user-level (`~/.claude/`), and enabled-plugin sources, with a filter box to search by name or description. Tap any item to insert it (plugin-provided items are inserted with their `plugin-name:item-name` namespaced form, which is required for those to resolve correctly).
 
 ### Retry Failed Messages
 

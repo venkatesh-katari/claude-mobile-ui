@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
 import { createPatch } from 'diff';
 import { marked } from 'marked';
 import hljs from 'highlight.js';
@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { copyToClipboard } from '../utils/clipboard';
 import { apiFetch } from '../utils/api';
+import { useWakeLock } from '../utils/useWakeLock';
 import Explorer from './Explorer';
 import NewChatSetup from './NewChatSetup';
 import './ChatView.css';
@@ -141,6 +142,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   const { sessionId, projectPath, title, permissionMode, model = 'claude-sonnet-5' } = chatState;
   const [messages, setMessages] = useState([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  useWakeLock(isStreaming);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [inputText, setInputText] = useState('');
@@ -464,14 +466,23 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
     try { navigator.vibrate?.(40); } catch {}
   }
 
-  function handleEditResend(index, newText) {
+  // sendMessage's identity changes on every keystroke (it reads inputText), so we
+  // stash the latest version in a ref and expose a referentially-stable wrapper —
+  // otherwise MessageBubble's memoization below would be defeated on every keystroke.
+  const sendMessageRef = useRef(sendMessage);
+  sendMessageRef.current = sendMessage;
+
+  const handleEditResend = useCallback((index, newText) => {
     setEditingMsg(null);
     const trimmed = newText.trim();
     if (!trimmed) return;
     // Slice messages up to (not including) the edited message, then resend
     setMessages(prev => prev.slice(0, index));
-    sendMessage(trimmed);
-  }
+    sendMessageRef.current(trimmed);
+  }, []);
+
+  const handleEditStart = useCallback((idx, text) => setEditingMsg({ index: idx, text }), []);
+  const handleEditCancel = useCallback(() => setEditingMsg(null), []);
 
   function handleKeydown(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -645,8 +656,8 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
                   index={i}
                   isStreaming={isStreaming}
                   editingMsg={editingMsg}
-                  onEditStart={(idx, text) => setEditingMsg({ index: idx, text })}
-                  onEditCancel={() => setEditingMsg(null)}
+                  onEditStart={handleEditStart}
+                  onEditCancel={handleEditCancel}
                   onEditResend={handleEditResend}
                 />
               ))}
@@ -1048,7 +1059,12 @@ function SlashPicker({ projectPath, onSelect, onClose }) {
 // ============================================================================
 // Message bubble
 // ============================================================================
-function MessageBubble({ msg, index, isStreaming, editingMsg, onEditStart, onEditCancel, onEditResend }) {
+const MarkdownText = memo(function MarkdownText({ text }) {
+  const html = useMemo(() => marked.parse(text || ''), [text]);
+  return <div dangerouslySetInnerHTML={{ __html: html }} />;
+});
+
+const MessageBubble = memo(function MessageBubble({ msg, index, isStreaming, editingMsg, onEditStart, onEditCancel, onEditResend }) {
   const [copied, setCopied] = useState(false);
   const [showCost, setShowCost] = useState(false);
   const longPressTimer = useRef(null);
@@ -1103,7 +1119,7 @@ function MessageBubble({ msg, index, isStreaming, editingMsg, onEditStart, onEdi
         onTouchStart={!isStreaming ? onPressStart : undefined}
         onTouchEnd={onPressEnd}
       >
-        <div className="cv-msg-body cv-user-body" dangerouslySetInnerHTML={{ __html: marked.parse(msg.content || '') }} />
+        <div className="cv-msg-body cv-user-body"><MarkdownText text={msg.content} /></div>
       </div>
     );
   }
@@ -1124,7 +1140,7 @@ function MessageBubble({ msg, index, isStreaming, editingMsg, onEditStart, onEdi
           <div className="cv-msg-body cv-assistant-body">
             {parts.map((part, i) =>
               part.type === 'text'
-                ? <div key={i} dangerouslySetInnerHTML={{ __html: marked.parse(part.text || '') }} />
+                ? <MarkdownText key={i} text={part.text} />
                 : <ToolChip key={i} part={part} />
             )}
           </div>
@@ -1167,4 +1183,4 @@ function MessageBubble({ msg, index, isStreaming, editingMsg, onEditStart, onEdi
   }
 
   return null;
-}
+});

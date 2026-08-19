@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Plus, Sun, Moon, Search, ChevronDown, Pencil, Radio } from 'lucide-react';
 import { apiFetch } from '../utils/api';
 import { useStatus } from '../utils/useStatus';
@@ -101,7 +101,7 @@ function SessionCard({ session, projectId, onOpen, onRename, renamingId, onRenam
   );
 }
 
-export default function SessionList({ onOpenSession, onNewChat, theme, onToggleTheme }) {
+export default function SessionList({ onOpenSession, onNewChat, theme, onToggleTheme, autoOpenSessionId, onDeepLinkResolved }) {
   const [projects, setProjects] = useState([]);
   const [expanded, setExpanded] = useState(new Set());
   const [loading, setLoading] = useState(true);
@@ -174,6 +174,20 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
       onOpenSession(sessionId, projectPath, projectId, summary);
     }
   }, [activeSessionIds, onOpenSession]);
+
+  // Deep link / refresh landed on a specific session — once project data has
+  // loaded, resolve it against the same list used for manual taps and open it
+  // (still going through the conflict check above). Runs at most once per mount.
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (!autoOpenSessionId || autoOpenedRef.current || loading) return;
+    autoOpenedRef.current = true;
+    const match = projects
+      .flatMap(p => p.sessions.map(s => ({ ...s, projectId: p.id })))
+      .find(s => s.sessionId === autoOpenSessionId);
+    if (match) handleOpenSession(match.sessionId, match.projectPath, match.projectId, match.summary);
+    onDeepLinkResolved?.(!!match);
+  }, [autoOpenSessionId, loading, projects, handleOpenSession, onDeepLinkResolved]);
 
   const handleRenameComplete = useCallback((projectId, sessionId, newTitle) => {
     setProjects(prev => prev.map(p =>
