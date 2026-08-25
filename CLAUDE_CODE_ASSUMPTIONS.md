@@ -6,7 +6,7 @@ all reverse-engineered from CLI behavior on the versions noted. When the CLI
 updates and something in the UI breaks (blank titles, renames not saving,
 missing messages, chat not starting), check here first.
 
-Last verified against: `claude --version` → **2.1.220**
+Last verified against: `claude --version` → **2.1.232** (checked 2026-08-24)
 
 How to re-verify: run `claude --help` and diff against the flags below, and
 inspect a real session file under `~/.claude/projects/<project>/` for the
@@ -48,10 +48,17 @@ one entry per session (`sessionId`, `summary`, `firstPrompt`, `messageCount`,
 `created`, `modified`, `gitBranch`). The app originally read/wrote titles
 exclusively through this file.
 
-**Current reality (verified 2026-08-07):** newer CLI versions do **not**
-write this file at all. Confirmed by checking
-`~/.claude/projects/-Users-vkatari-dev-tools-claude-mobile-ui/` — 22 session
-`.jsonl` files, zero `sessions-index.json`.
+**Current reality (re-verified 2026-08-24, CLI 2.1.232):** the file is
+written **inconsistently** — some projects have it, most don't. As of this
+check, 3 of ~30 projects had a `sessions-index.json` (they did not at the
+2026-08-07 check, when zero projects had one), while this repo's own project
+still has none. So the CLI has partially resumed writing it, but you cannot
+rely on it being present for any given project. The code already handles this
+correctly: `getProjectInfo()` and `/api/projects/:id/sessions` both do a
+per-project `existsSync(indexPath)` check and fall back to derivation when
+absent, so a mix of indexed and non-indexed projects both list correctly
+(smoke-tested 2026-08-24: an indexed project shows its stored title, a
+non-indexed project derives one — both with correct `projectPath`).
 
 **Current handling:** `server.js` (`/api/projects/:id/sessions`, the PATCH
 rename route) treats the index as optional, falling back to:
@@ -109,7 +116,8 @@ against the read logic in `deriveSessionSummary()`.
   `is_error`).
 - Other line types seen in real files but currently ignored by the parser:
   `queue-operation`, `attachment`, `file-history-snapshot`,
-  `file-history-delta`, `system`, `last-prompt`. These are passed over
+  `file-history-delta`, `system`, `last-prompt`, and (new as of CLI 2.1.232,
+  seen 2026-08-24) `atis-latch` and `mode`. These are passed over
   silently (the `try/catch` per-line in `parseSessionJsonl` and
   `deriveSessionSummary` swallows anything that doesn't match a known
   `type`), so new unknown line types are safe by construction — but a
@@ -137,7 +145,10 @@ deltas), and `result` (turn completion, carries `session_id`).
 
 - Code: `/api/chat` route in `server.js`
 
-**Verified current flag validity (2026-08-07, CLI 2.1.220):**
+**Verified current flag validity (re-checked 2026-08-24, CLI 2.1.232 — no
+change since 2026-08-07/2.1.220; `--permission-mode` choices are still
+`acceptEdits, auto, bypassPermissions, manual, dontAsk, plan` and `--model`
+still takes aliases or full names, so both discrepancies below still stand):**
 - `--output-format stream-json`, `--include-partial-messages`,
   `--verbose`, `-p`, `--resume <id>` — all present in `claude --help`.
 - `--model <model>` — CLI now documents accepting **aliases** (`sonnet`,
