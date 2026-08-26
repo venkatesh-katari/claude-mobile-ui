@@ -1,5 +1,5 @@
 .ncs-section { padding: 16px; }
-.ncs-title { font-size: 18px; margin-bottom: 16px; color: var(--text); }
+.ncs-title { font-size: 18px; font-weight: 600; margin-bottom: 16px; color: var(--text); }
 .ncs-label {
   display: block;
   font-size: 12px;
@@ -31,6 +31,24 @@
   background: var(--bg-card);
   color: var(--text);
 }
+
+/* Native <select> on desktop; a bottom-sheet trigger button on touch devices
+   (the native mobile <select> picker renders as an awkward anchored list). */
+.ncs-select-trigger { display: none; }
+@media (hover: none) {
+  .ncs-select-native { display: none; }
+  .ncs-select-trigger {
+    display: flex;
+    align-items: center;
+    text-align: left;
+    cursor: pointer;
+  }
+  .ncs-select-trigger span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
 .ncs-hint {
   font-size: 12px;
   color: var(--text-dim);
@@ -38,18 +56,6 @@
   margin-bottom: 16px;
   line-height: 1.4;
 }
-.ncs-summary {
-  font-size: 12px;
-  color: var(--text-dim);
-  background: var(--bg-input);
-  padding: 6px 10px;
-  border-radius: 8px;
-  margin-bottom: 12px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.ncs-ready { color: var(--accent); font-weight: 500; }
 .ncs-footer { font-size: 13px; color: var(--text-dim); margin-top: 8px; }
 
 .ncs-notif-btn {

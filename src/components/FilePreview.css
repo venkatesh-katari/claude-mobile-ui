@@ -3,7 +3,7 @@
   inset: 0;
   z-index: 200;
   background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(3px);
+  backdrop-filter: blur(8px);
   display: flex;
   align-items: flex-end;
 }
@@ -152,7 +152,7 @@
 .fp-markdown {
   padding: 20px 22px 32px;
   font-size: 15px;
-  line-height: 1.75;
+  line-height: 1.6;
   background: var(--bg-card);
   color: var(--text);
 }
@@ -190,14 +190,14 @@
 }
 .fp-markdown th {
   background: var(--bg-input);
-  padding: 8px 12px;
+  padding: 16px 12px;
   text-align: left;
   font-weight: 600;
   border: 1px solid var(--border);
   white-space: nowrap;
 }
 .fp-markdown td {
-  padding: 8px 12px;
+  padding: 16px 12px;
   border: 1px solid var(--border);
 }
 .fp-markdown tr:nth-child(even) td { background: var(--bg-hover); }
@@ -207,7 +207,7 @@
   margin: 0;
   padding: 20px;
   font-size: 14px;
-  line-height: 1.7;
+  line-height: 1.6;
   font-family: inherit;
   color: var(--text);
   white-space: pre-wrap;

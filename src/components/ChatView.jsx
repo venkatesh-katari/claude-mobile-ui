@@ -5,9 +5,9 @@ import hljs from 'highlight.js';
 import {
   ArrowLeft, FolderOpen, MoreHorizontal, Mic, MicOff, ArrowUp,
   FileText, FilePen, Terminal, Search, Globe, List, BookOpen,
-  Wrench, Sun, Moon, Download, Check, ChevronDown, ChevronUp, Copy,
+  Wrench, Sun, Moon, Download, Check, ChevronDown, ChevronUp, ChevronRight, Copy,
   RotateCcw, WifiOff, Square, ArrowDown, Clock, Pencil, AtSign,
-  DollarSign, X, History, Slash, Sparkles
+  DollarSign, X, History, Slash, Sparkles, Plus
 } from 'lucide-react';
 import { copyToClipboard } from '../utils/clipboard';
 import { apiFetch } from '../utils/api';
@@ -160,6 +160,8 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   const [editingMsg, setEditingMsg] = useState(null); // { index, text }
   const [showAtPicker, setShowAtPicker] = useState(false);
   const [showSlashPicker, setShowSlashPicker] = useState(false);
+  const [showActions, setShowActions] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
   const [resumablePid, setResumablePid] = useState(null); // pid of a dropped-but-still-running stream
   const chatRef = useRef(null);
   const inputRef = useRef(null);
@@ -598,20 +600,19 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
         </button>
         <div className="cv-header-center">
           <span className="cv-title">{title}</span>
-          {sessionCost > 0 && (
-            <span className="cv-session-cost">${sessionCost.toFixed(3)}</span>
-          )}
+          <span className="cv-header-subtitle">
+            {modelBadgeLabel[model] || model}
+            <span className="cv-header-dot">·</span>
+            {modeBadgeLabel[permissionMode] || permissionMode}
+            {sessionCost > 0 && (
+              <>
+                <span className="cv-header-dot">·</span>
+                ${sessionCost.toFixed(3)}
+              </>
+            )}
+          </span>
         </div>
         <div className="cv-header-actions">
-          <button
-            className={`cv-explorer-btn ${showExplorer ? 'active' : ''}`}
-            onClick={() => setShowExplorer(v => !v)}
-            title="Project Explorer"
-          >
-            <FolderOpen size={16} />
-          </button>
-          <span className="cv-header-chip">{modelBadgeLabel[model] || model}</span>
-          <span className="cv-header-chip">{modeBadgeLabel[permissionMode] || permissionMode}</span>
           <OverflowMenu
             theme={theme}
             onToggleTheme={onToggleTheme}
@@ -704,6 +705,71 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
         )}
       </div>
 
+      {/* Actions bottom sheet — single "+" entry point for all input-bar controls */}
+      {showActions && (
+        <div className="cv-menu-overlay" onClick={() => setShowActions(false)}>
+          <div className="cv-menu-sheet cv-action-sheet" onClick={e => e.stopPropagation()}>
+            <div className="cv-menu-handle" />
+            <div className="cv-action-sheet-title">Actions</div>
+            <button className="cv-action-item" onClick={() => { setShowActions(false); setShowExplorer(true); }}>
+              <span className="cv-action-icon-circle"><FolderOpen size={16} /></span>
+              <span className="cv-action-label">Preview files from project</span>
+              <ChevronRight size={16} className="cv-action-chevron" />
+            </button>
+            <button className="cv-action-item" onClick={() => {
+              setShowActions(false);
+              setInputText(prev => prev + '@');
+              setShowAtPicker(true);
+            }}>
+              <span className="cv-action-icon-circle"><AtSign size={16} /></span>
+              <span className="cv-action-label">Add files to chat</span>
+              <ChevronRight size={16} className="cv-action-chevron" />
+            </button>
+            <button className="cv-action-item" onClick={() => {
+              setShowActions(false);
+              setInputText(prev => (prev ? prev : '') + '/');
+              setShowSlashPicker(true);
+            }}>
+              <span className="cv-action-icon-circle"><Slash size={16} /></span>
+              <span className="cv-action-label">Tool/command access</span>
+              <ChevronRight size={16} className="cv-action-chevron" />
+            </button>
+            <button className="cv-action-item" onClick={() => { setShowActions(false); setShowHistory(true); }}>
+              <span className="cv-action-icon-circle"><History size={16} /></span>
+              <span className="cv-action-label">Recent prompts</span>
+              <ChevronRight size={16} className="cv-action-chevron" />
+            </button>
+            <button className="cv-action-item" onClick={() => { setShowActions(false); setShowTemplates(true); }}>
+              <span className="cv-action-icon-circle"><Sparkles size={16} /></span>
+              <span className="cv-action-label">Prompt templates</span>
+              <ChevronRight size={16} className="cv-action-chevron" />
+            </button>
+            <button className="cv-menu-cancel" onClick={() => setShowActions(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Prompt templates bottom sheet */}
+      {showTemplates && (
+        <div className="cv-menu-overlay" onClick={() => setShowTemplates(false)}>
+          <div className="cv-menu-sheet" onClick={e => e.stopPropagation()}>
+            <div className="cv-menu-handle" />
+            <div className="cv-menu-section-label">Prompt templates</div>
+            {QUICK_PROMPTS.map(p => (
+              <button key={p} className="cv-menu-item" onClick={() => {
+                setInputText(p);
+                setShowTemplates(false);
+                setTimeout(() => inputRef.current?.focus(), 50);
+              }}>
+                <Sparkles size={14} className="cv-menu-icon" />
+                <span className="cv-menu-item-label">{p}</span>
+              </button>
+            ))}
+            <button className="cv-menu-cancel" onClick={() => setShowTemplates(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
       {/* Active tool status + stop button */}
       {isStreaming && (
         <div className="cv-status-bar">
@@ -718,41 +784,9 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
         </div>
       )}
 
-      {/* Quick prompt chips */}
-      {!isStreaming && !isNewChat && (
-        <div className="cv-chips-bar">
-          {QUICK_PROMPTS.map(p => (
-            <button key={p} className="cv-chip" onClick={() => {
-              setInputText(p);
-              setTimeout(() => inputRef.current?.focus(), 50);
-            }}>{p}</button>
-          ))}
-        </div>
-      )}
-
       <div className="cv-input-bar">
-        <button className="cv-input-action-btn" onClick={() => setShowHistory(true)} title="Prompt history">
-          <History size={16} />
-        </button>
-        <button
-          className="cv-input-action-btn"
-          onClick={() => {
-            setInputText(prev => prev + '@');
-            setShowAtPicker(true);
-          }}
-          title="Mention a file"
-        >
-          <AtSign size={16} />
-        </button>
-        <button
-          className="cv-input-action-btn"
-          onClick={() => {
-            setInputText(prev => (prev ? prev : '') + '/');
-            setShowSlashPicker(true);
-          }}
-          title="Skills & commands"
-        >
-          <Slash size={16} />
+        <button className="cv-input-action-btn" onClick={() => setShowActions(true)} title="Actions">
+          <Plus size={18} />
         </button>
         <textarea
           ref={inputRef}

@@ -4,7 +4,7 @@
   inset: 0;
   z-index: 100;
   background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(3px);
+  backdrop-filter: blur(8px);
 }
 
 /* Sidebar panel */
@@ -32,7 +32,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: calc(var(--safe-top) + 12px) 14px 12px;
+  padding: calc(var(--safe-top) + 12px) 16px 12px;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -79,14 +79,14 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 10px;
+  padding: 16px 16px;
   cursor: pointer;
   transition: background 0.1s;
   min-height: 34px;
   position: relative;
 }
 .exp-row:hover { background: var(--bg-hover); }
-.exp-row:active { background: var(--border); }
+.exp-row:active { background: var(--border); transform: scale(0.99); }
 
 .exp-icon {
   flex-shrink: 0;
@@ -128,16 +128,11 @@
   height: 22px;
   border-radius: 5px;
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s, color 0.15s, background 0.15s;
+  transition: color 0.15s, background 0.15s;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-}
-.exp-row:hover .exp-copy { opacity: 1; }
-@media (hover: none) {
-  .exp-copy { opacity: 0.5; }
 }
 .exp-copy:hover {
   background: var(--bg-input);
