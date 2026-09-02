@@ -555,9 +555,13 @@ app.post('/api/chat', (req, res) => {
 
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
 
-  // Add permission mode if specified
-  const validModes = ['default', 'plan', 'acceptEdits', 'auto', 'bypassPermissions'];
-  if (permissionMode && validModes.includes(permissionMode)) {
+  // Add permission mode if specified. 'default' is our own app-level sentinel
+  // for "let the CLI use its own default behavior" — the CLI's
+  // --permission-mode does not accept "default" as a value (verified against
+  // `claude --help`), so it's deliberately excluded here and the flag is
+  // omitted entirely rather than passing a value the CLI doesn't recognize.
+  const CLI_PERMISSION_MODES = ['plan', 'acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk'];
+  if (permissionMode && CLI_PERMISSION_MODES.includes(permissionMode)) {
     args.push('--permission-mode', permissionMode);
   }
 

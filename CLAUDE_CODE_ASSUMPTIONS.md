@@ -6,7 +6,7 @@ all reverse-engineered from CLI behavior on the versions noted. When the CLI
 updates and something in the UI breaks (blank titles, renames not saving,
 missing messages, chat not starting), check here first.
 
-Last verified against: `claude --version` → **2.1.232** (checked 2026-08-24)
+Last verified against: `claude --version` → **2.1.246** (checked 2026-08-31)
 
 How to re-verify: run `claude --help` and diff against the flags below, and
 inspect a real session file under `~/.claude/projects/<project>/` for the
@@ -145,36 +145,48 @@ deltas), and `result` (turn completion, carries `session_id`).
 
 - Code: `/api/chat` route in `server.js`
 
-**Verified current flag validity (re-checked 2026-08-24, CLI 2.1.232 — no
-change since 2026-08-07/2.1.220; `--permission-mode` choices are still
+**Verified current flag validity (re-checked 2026-08-31, CLI 2.1.246 — no
+change since 2026-08-24/2.1.232; `--permission-mode` choices are still
 `acceptEdits, auto, bypassPermissions, manual, dontAsk, plan` and `--model`
-still takes aliases or full names, so both discrepancies below still stand):**
+still takes aliases or full names):**
 - `--output-format stream-json`, `--include-partial-messages`,
   `--verbose`, `-p`, `--resume <id>` — all present in `claude --help`.
-- `--model <model>` — CLI now documents accepting **aliases** (`sonnet`,
+- `--model <model>` — CLI still documents accepting **aliases** (`sonnet`,
   `opus`, `fable`) or full model names (e.g. `claude-fable-5`). The code's
   hardcoded allowlist (`claude-sonnet-5`, `claude-opus-4-8`, `haiku`) is
-  narrower than what the CLI accepts, and mixes an alias (`haiku`) with full
-  names for the other two — inconsistent, and will silently drop the
-  `--model` flag entirely (falls through to CLI default) if the user's
-  saved model value isn't in this exact list.
-- `--permission-mode <mode>` — **discrepancy found:** the CLI's own
-  `--help` lists valid choices as `acceptEdits, auto, bypassPermissions,
-  manual, dontAsk, plan`. The code's `validModes` allowlist is `default,
-  plan, acceptEdits, auto, bypassPermissions` — it includes `default`
-  (not in the CLI's list) and omits `manual` and `dontAsk` (which the CLI
-  does accept). Passing `--permission-mode default` was tested directly
-  against the CLI and does NOT error (likely silently ignored / same as
-  omitting the flag), so this "works" today by accident, not by contract.
+  still narrower than what the CLI's flag format accepts, and still mixes
+  an alias (`haiku`) with full names for the other two — stylistically
+  inconsistent, but **not a live bug**: re-verified today by actually
+  spawning `claude -p --model <id> ...` for all three hardcoded values
+  (capped with `--max-budget-usd` to keep the test cheap) and confirming
+  each resolves to a valid `canonicalModel` (`claude-sonnet-5`,
+  `claude-opus-4-8`, and `haiku` → `claude-haiku-4-5`) with no error. No
+  drift here despite the allowlist/format inconsistency.
+- `--permission-mode <mode>` — the discrepancy noted on 2026-08-24 was
+  real and is now **fixed** (2026-08-31): the CLI's own `--help` lists
+  valid choices as `acceptEdits, auto, bypassPermissions, manual, dontAsk,
+  plan` — it does not accept `default`. `server.js`'s `/api/chat` route
+  previously included `'default'` in its passthrough allowlist and passed
+  `--permission-mode default` straight to the CLI, relying on the
+  undocumented fact that the CLI silently ignores unrecognized values
+  instead of erroring. Changed to `CLI_PERMISSION_MODES` (`plan,
+  acceptEdits, auto, bypassPermissions, manual, dontAsk` — the CLI's exact
+  list minus nothing), which now excludes `'default'` so the flag is
+  omitted entirely for that value (our own app-level sentinel for "use the
+  CLI's own default behavior") instead of passing a value the CLI doesn't
+  recognize. Also closes the previously-omitted `manual`/`dontAsk` gap,
+  even though neither is exposed in the UI yet.
 
-**If this breaks:** `--model`/`--permission-mode` silently no-ops instead of
-applying the user's chosen setting (wrong model/permissions used, no error
-shown to the user); or, if a future CLI version starts hard-validating
-`--permission-mode` values it used to accept, `/api/chat` would fail outright
-with a spawn/stderr error for anyone using "default" mode.
+**If this breaks:** `--model` silently no-ops instead of applying the
+user's chosen setting (wrong model used, no error shown to the user) if a
+model ID the CLI stops accepting is still in the app's allowlist; or, if a
+future CLI version starts hard-validating `--permission-mode` in a way that
+rejects one of `CLI_PERMISSION_MODES`, `/api/chat` would fail outright with
+a spawn/stderr error for anyone using that mode.
 
 **Re-verify by:** `claude --help | grep -A6 -- '--model\|--permission-mode'`
-and compare literal choices against `validModes/validModels` in `server.js`.
+and compare literal choices against `CLI_PERMISSION_MODES`/`validModels` in
+`server.js`.
 
 ---
 
