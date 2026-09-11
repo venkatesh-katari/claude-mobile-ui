@@ -1,0 +1,43 @@
+/* Map react-diff-view's own CSS variables onto this app's theme variables,
+   so light/dark switches without any duplicated color logic. Must be
+   imported after 'react-diff-view/style/index.css' (same module, later
+   import) so these values win over the package's defaults. */
+:root {
+  --diff-background-color: var(--bg-card);
+  --diff-text-color: var(--text);
+  --diff-font-family: 'SF Mono', 'Fira Code', monospace;
+  --diff-selection-background-color: var(--accent-dim);
+  --diff-selection-text-color: var(--text);
+  --diff-gutter-insert-background-color: rgba(74, 222, 128, 0.15);
+  --diff-gutter-insert-text-color: var(--text-dim);
+  --diff-gutter-delete-background-color: rgba(248, 113, 113, 0.15);
+  --diff-gutter-delete-text-color: var(--text-dim);
+  --diff-gutter-selected-background-color: var(--accent-dim);
+  --diff-gutter-selected-text-color: var(--text);
+  --diff-code-insert-background-color: rgba(74, 222, 128, 0.1);
+  --diff-code-insert-text-color: var(--text);
+  --diff-code-delete-background-color: rgba(248, 113, 113, 0.1);
+  --diff-code-delete-text-color: var(--text);
+  --diff-code-insert-edit-background-color: rgba(74, 222, 128, 0.3);
+  --diff-code-delete-edit-background-color: rgba(248, 113, 113, 0.3);
+  --diff-code-selected-background-color: var(--accent-dim);
+  --diff-omit-gutter-line-color: var(--border);
+}
+
+.gdv-root {
+  font-size: 12px;
+  overflow-x: auto;
+}
+.gdv-root .diff {
+  width: 100%;
+  border-collapse: collapse;
+}
+.gdv-root .diff-gutter {
+  user-select: none;
+}
+.gdv-empty {
+  padding: 32px 20px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}

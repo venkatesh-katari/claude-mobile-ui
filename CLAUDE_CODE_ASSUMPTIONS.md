@@ -6,7 +6,7 @@ all reverse-engineered from CLI behavior on the versions noted. When the CLI
 updates and something in the UI breaks (blank titles, renames not saving,
 missing messages, chat not starting), check here first.
 
-Last verified against: `claude --version` → **2.1.246** (checked 2026-08-31)
+Last verified against: `claude --version` → **2.1.258** (checked 2026-09-07)
 
 How to re-verify: run `claude --help` and diff against the flags below, and
 inspect a real session file under `~/.claude/projects/<project>/` for the
@@ -145,8 +145,8 @@ deltas), and `result` (turn completion, carries `session_id`).
 
 - Code: `/api/chat` route in `server.js`
 
-**Verified current flag validity (re-checked 2026-08-31, CLI 2.1.246 — no
-change since 2026-08-24/2.1.232; `--permission-mode` choices are still
+**Verified current flag validity (re-checked 2026-09-07, CLI 2.1.258 — no
+change since 2026-08-31/2.1.246; `--permission-mode` choices are still
 `acceptEdits, auto, bypassPermissions, manual, dontAsk, plan` and `--model`
 still takes aliases or full names):**
 - `--output-format stream-json`, `--include-partial-messages`,

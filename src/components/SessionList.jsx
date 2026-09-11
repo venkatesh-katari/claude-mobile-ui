@@ -167,17 +167,28 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
     });
   }
 
-  const handleOpenSession = useCallback((sessionId, projectPath, projectId, summary) => {
-    if (activeSessionIds.has(sessionId)) {
-      setConflictSession({ sessionId, projectPath, projectId, summary });
-    } else {
-      onOpenSession(sessionId, projectPath, projectId, summary);
-    }
-  }, [activeSessionIds, onOpenSession]);
+  // activeSessionIds only ever reflects streams this mobile server itself
+  // spawned (never a real second device — see CLAUDE_CODE_ASSUMPTIONS.md #7),
+  // so an entry here just means "reconnect to your own still-running stream,"
+  // not a genuine conflict — ChatView's reconnect effect handles that via
+  // /api/streams/active-by-session. A *real* desktop conflict (session last
+  // touched by desktop CLI/VSCode/Cursor, and that origin still looks live)
+  // is checked server-side; see docs/session-conflict-detection.md.
+  const handleOpenSession = useCallback(async (sessionId, projectPath, projectId, summary) => {
+    try {
+      const res = await apiFetch(`/api/sessions/${sessionId}/conflict-check`);
+      const { conflict } = res.ok ? await res.json() : { conflict: false };
+      if (conflict) {
+        setConflictSession({ sessionId, projectPath, projectId, summary });
+        return;
+      }
+    } catch { /* check failed — fall through and open normally */ }
+    onOpenSession(sessionId, projectPath, projectId, summary);
+  }, [onOpenSession]);
 
   // Deep link / refresh landed on a specific session — once project data has
-  // loaded, resolve it against the same list used for manual taps and open it
-  // (still going through the conflict check above). Runs at most once per mount.
+  // loaded, resolve it against the same list used for manual taps and open it.
+  // Runs at most once per mount.
   const autoOpenedRef = useRef(false);
   useEffect(() => {
     if (!autoOpenSessionId || autoOpenedRef.current || loading) return;
@@ -217,34 +228,16 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
   return (
     <div className="sl-container">
 
-      {/* Conflict bottom sheet */}
+      {/* Conflict bottom sheet — real desktop-live signal, see docs/session-conflict-detection.md */}
       {conflictSession && (
         <div className="sl-conflict-overlay" onClick={() => setConflictSession(null)}>
           <div className="sl-conflict-sheet" onClick={e => e.stopPropagation()}>
             <div className="sl-conflict-handle" />
             <div className="sl-conflict-icon">⚠️</div>
-            <h3 className="sl-conflict-title">Session is active on desktop</h3>
+            <h3 className="sl-conflict-title">May be open on desktop</h3>
             <p className="sl-conflict-body">
-              Claude is currently running in <strong>{conflictSession.summary || 'this session'}</strong> on another window or device. Opening it here at the same time will corrupt the conversation history.
+              <strong>{conflictSession.summary || 'This session'}</strong> looks like it has an active Claude Code window open on your desktop right now. Opening it here at the same time can corrupt the conversation history.
             </p>
-            <button
-              className="sl-conflict-btn sl-conflict-takeover"
-              onClick={async () => {
-                try {
-                  const res = await apiFetch(`/api/sessions/${conflictSession.sessionId}/takeover`, { method: 'POST' });
-                  if (!res.ok) throw new Error();
-                } catch {
-                  // Takeover failed — don't open; show the sheet again with updated state
-                  setConflictSession(null);
-                  return;
-                }
-                setActiveSessionIds(prev => { const n = new Set(prev); n.delete(conflictSession.sessionId); return n; });
-                onOpenSession(conflictSession.sessionId, conflictSession.projectPath, conflictSession.projectId, conflictSession.summary);
-                setConflictSession(null);
-              }}
-            >
-              Take Over — stop desktop &amp; continue here
-            </button>
             <button
               className="sl-conflict-btn sl-conflict-anyway"
               onClick={() => {

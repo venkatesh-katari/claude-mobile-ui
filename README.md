@@ -227,28 +227,30 @@ If you've been working in Claude Code CLI on your desktop and Claude has finishe
 
 ### Conflict detection (active session)
 
-If Claude is **still running** on your desktop when you try to open the same session on mobile, the app detects the conflict and shows a warning sheet with three options:
+If a session was last touched by desktop (VSCode/Cursor or terminal) and that desktop session still looks active, opening the same session on mobile shows a warning sheet with two options:
 
-**Take Over** *(recommended)* — stops the desktop Claude process cleanly, then opens the session on mobile. No data loss, clean handoff.
-
-**Continue Anyway** — opens the session without stopping the desktop process. Both will be writing to the same session file simultaneously, which can corrupt history. Only use this if you know what you're doing.
+**Continue Anyway** — opens the session anyway. Both will be writing to the same session file simultaneously, which can corrupt history. Only use this if you know what you're doing.
 
 **Go Back** — cancels and returns to the session list.
 
+There's no "Take Over" button — the app has no safe way to identify and stop the exact desktop process from mobile, so it only warns rather than acting on your behalf.
+
 ### How it works
 
-Active sessions show a green **Live** badge in the session list so you can see at a glance which sessions are currently running before you tap into them. The badge updates every 5 seconds.
+The green **Live** badge in the session list is a separate, simpler signal: it shows sessions *this mobile server itself* is currently streaming (e.g. you started a reply and haven't gotten a response yet), updated every 5 seconds. The desktop-conflict warning above is a different, independent check that only runs when you tap to open a session — see [SESSION_CONFLICT_DETECTION.md](SESSION_CONFLICT_DETECTION.md) for exactly how it decides real desktop conflict vs. safe-to-open, and its known false-positive/negative edge cases.
 
 ### Best practice
 
 - Finish your current turn on desktop before switching to mobile
-- If you need to hand off mid-response, use **Take Over** — it's safe and instant
+- If you're unsure whether desktop is still active, check **Continue Anyway** vs. **Go Back** in the warning sheet rather than guessing
 
 ---
 
-## Reconnect After Sleep
+## Reconnect After Sleep or Disconnect
 
-If your phone screen locks mid-response, the server keeps Claude running. When you reopen the app it automatically replays the buffered output and resumes the live stream — you won't miss any of the response.
+A chat workflow runs on the server, not in your browser tab — closing the tab, closing the browser entirely, locking your phone screen, or losing WiFi mid-response does **not** stop Claude. It keeps running and writing to the session as long as the server itself is running. Reopen the app later (even from a different device) and it picks the session back up: still-in-progress responses resume streaming from where they left off, and already-finished ones just show the latest messages.
+
+This only depends on the server process staying up — if you stop the server (or the Mac it runs on sleeps/shuts down) while a response is in progress, that response is interrupted, same as stopping any other program.
 
 ---
 

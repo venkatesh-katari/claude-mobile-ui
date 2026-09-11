@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import SessionList from './components/SessionList';
 import ChatView from './components/ChatView';
 import LockScreen from './components/LockScreen';
+import DiffViewerPage from './components/DiffViewerPage';
 import { getPin, clearPin, apiFetch } from './utils/api';
 
 function getInitialTheme() {
@@ -13,6 +14,13 @@ function getInitialTheme() {
 }
 
 export default function App() {
+  // A standalone, chrome-free route for "open diff in new tab" — checked
+  // before any hooks run so it never participates in App's own hook order.
+  // There's no router in this app; this query param is the whole mechanism.
+  if (new URLSearchParams(window.location.search).get('diffView') === '1') {
+    return <DiffViewerPage />;
+  }
+
   const [theme, setTheme] = useState(getInitialTheme);
   const [authState, setAuthState] = useState('checking'); // 'checking' | 'locked' | 'unlocked'
 

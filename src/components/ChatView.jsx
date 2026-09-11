@@ -7,13 +7,14 @@ import {
   FileText, FilePen, Terminal, Search, Globe, List, BookOpen,
   Wrench, Sun, Moon, Download, Check, ChevronDown, ChevronUp, ChevronRight, Copy,
   RotateCcw, WifiOff, Square, ArrowDown, Clock, Pencil, AtSign,
-  DollarSign, X, History, Slash, Sparkles, Plus
+  DollarSign, X, History, Slash, Sparkles, Plus, GitCompare
 } from 'lucide-react';
 import { copyToClipboard } from '../utils/clipboard';
 import { apiFetch } from '../utils/api';
 import { useWakeLock } from '../utils/useWakeLock';
 import Explorer from './Explorer';
 import NewChatSetup from './NewChatSetup';
+import GitDiffSheet from './GitDiffSheet';
 import './ChatView.css';
 
 // Configure marked
@@ -162,6 +163,8 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   const [showSlashPicker, setShowSlashPicker] = useState(false);
   const [showActions, setShowActions] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
+  const [showGitDiff, setShowGitDiff] = useState(false);
+  const [gitIsRepo, setGitIsRepo] = useState(false);
   const [resumablePid, setResumablePid] = useState(null); // pid of a dropped-but-still-running stream
   const chatRef = useRef(null);
   const inputRef = useRef(null);
@@ -185,10 +188,38 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
     }
   }, [sessionId]);
 
+  // Reconnect to an in-progress workflow. Prefer the processId this tab
+  // already remembers (cheap, no round trip); if that's gone — new device,
+  // sessionStorage wiped by an iOS PWA relaunch, different tab — fall back
+  // to asking the server whether *this* session has a stream still running,
+  // so the workflow surviving a dropped connection is actually discoverable.
   useEffect(() => {
     const savedProcessId = sessionStorage.getItem(ACTIVE_PROCESS_KEY);
-    if (savedProcessId) reconnectToStream(savedProcessId);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (savedProcessId) {
+      reconnectToStream(savedProcessId);
+      return;
+    }
+    if (!sessionId) return;
+    apiFetch('/api/streams/active-by-session')
+      .then(r => r.ok ? r.json() : [])
+      .then(active => {
+        const match = active.find(a => a.sessionId === sessionId);
+        if (match) reconnectToStream(match.processId);
+      })
+      .catch(() => {});
+  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Gate the "+" sheet's Git Diff item on the project actually being a git
+  // repo — cheap check, refreshed whenever the working directory changes.
+  useEffect(() => {
+    if (!projectPath) { setGitIsRepo(false); return; }
+    apiFetch(`/api/git/status?cwd=${encodeURIComponent(projectPath)}`)
+      .then(r => r.ok ? r.json() : { isRepo: false })
+      .then(data => setGitIsRepo(!!data.isRepo))
+      .catch(() => setGitIsRepo(false));
+  }, [projectPath]);
+
+  const sessionChangedFiles = useMemo(() => collectSessionChangedFiles(messages), [messages]);
 
   async function loadMessages(sid) {
     setLoadingMessages(true);
@@ -445,10 +476,33 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
 
       await consumeSSEStream(res);
     } catch (err) {
-      if (err.name !== 'AbortError') {
-        const isNetwork = err.message === 'Failed to fetch' || err.name === 'TypeError';
-        setSendError({ text, reason: isNetwork ? 'Network error' : err.message });
+      if (err.name === 'AbortError') {
+        setIsStreaming(false);
+        assistantTextRef.current = '';
+        processIdRef.current = null;
+        abortRef.current = null;
+        sessionStorage.removeItem(ACTIVE_PROCESS_KEY);
+        return;
       }
+      // The POST may have actually reached the server and started a stream
+      // even though this fetch() failed on our end (e.g. the phone's network
+      // died mid-request) — reconnect to it instead of resending, which would
+      // otherwise race a second `claude --resume` process against the one
+      // that's already running and writing to the same session file.
+      if (sessionId) {
+        try {
+          const activeRes = await apiFetch('/api/streams/active-by-session');
+          const active = activeRes.ok ? await activeRes.json() : [];
+          const match = active.find(a => a.sessionId === sessionId);
+          if (match) {
+            abortRef.current = null;
+            await reconnectToStream(match.processId);
+            return;
+          }
+        } catch { /* fall through to the normal error/retry path below */ }
+      }
+      const isNetwork = err.message === 'Failed to fetch' || err.name === 'TypeError';
+      setSendError({ text, reason: isNetwork ? 'Network error' : err.message });
       setIsStreaming(false);
       assistantTextRef.current = '';
       processIdRef.current = null;
@@ -486,9 +540,9 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   const handleEditStart = useCallback((idx, text) => setEditingMsg({ index: idx, text }), []);
   const handleEditCancel = useCallback(() => setEditingMsg(null), []);
 
-  function handleKeydown(e) {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-  }
+  const handleAnswerQuestion = useCallback((replyText) => {
+    sendMessageRef.current(replyText);
+  }, []);
 
   function handleBack() {
     if (isStreaming && processIdRef.current) {
@@ -593,6 +647,15 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
         />
       )}
 
+      {/* Git diff bottom sheet */}
+      {showGitDiff && (
+        <GitDiffSheet
+          projectPath={projectPath}
+          sessionFiles={sessionChangedFiles}
+          onClose={() => setShowGitDiff(false)}
+        />
+      )}
+
       <div className="cv-header">
         <button className="cv-back" onClick={handleBack}>
           <ArrowLeft size={18} />
@@ -655,11 +718,13 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
                   key={i}
                   msg={msg}
                   index={i}
+                  isLastMessage={i === messages.length - 1}
                   isStreaming={isStreaming}
                   editingMsg={editingMsg}
                   onEditStart={handleEditStart}
                   onEditCancel={handleEditCancel}
                   onEditResend={handleEditResend}
+                  onAnswerQuestion={handleAnswerQuestion}
                 />
               ))}
               {resumablePid && !isStreaming && (
@@ -744,6 +809,13 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
               <span className="cv-action-label">Prompt templates</span>
               <ChevronRight size={16} className="cv-action-chevron" />
             </button>
+            {gitIsRepo && (
+              <button className="cv-action-item" onClick={() => { setShowActions(false); setShowGitDiff(true); }}>
+                <span className="cv-action-icon-circle"><GitCompare size={16} /></span>
+                <span className="cv-action-label">Git diff</span>
+                <ChevronRight size={16} className="cv-action-chevron" />
+              </button>
+            )}
             <button className="cv-menu-cancel" onClick={() => setShowActions(false)}>Cancel</button>
           </div>
         </div>
@@ -806,7 +878,6 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
             e.target.style.height = 'auto';
             e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
           }}
-          onKeyDown={handleKeydown}
         />
         <VoiceButton onTranscript={(t) => setInputText(prev => prev + (prev && !prev.endsWith(' ') ? ' ' : '') + t)} />
         <button className="cv-send" disabled={!inputText.trim() || isStreaming} onClick={() => sendMessage()}>
@@ -917,8 +988,179 @@ function ToolChip({ part }) {
 }
 
 // ============================================================================
+// Interactive question detection & rendering
+//
+// Claude Code's AskUserQuestion tool isn't offered to the model in headless
+// (-p) mode (verified: absent from the CLI's own declared tool list for
+// non-interactive sessions, with or without --input-format stream-json —
+// there's no live tool_use block to intercept). When the model wants to ask
+// a multiple-choice question anyway, it falls back to emitting the tool's
+// input schema as plain assistant text instead. This detects that shape
+// generically — any tool-specific renderer can be registered below — and
+// falls back to a raw-JSON card for anything recognized-but-unspecialized.
+// Answering just sends the chosen option(s) as the next chat message, since
+// there's no live process to write a response back into.
+// ============================================================================
+function tryParseJson(str) {
+  try { return JSON.parse(str); } catch { return null; }
+}
+
+function parseInteractiveQuestion(text) {
+  if (!text) return null;
+  const payload = tryParseJson(text.trim());
+  if (!payload || payload.questions === undefined) return null;
+
+  let questions = payload.questions;
+  if (typeof questions === 'string') questions = tryParseJson(questions);
+  if (!Array.isArray(questions) || questions.length === 0) return null;
+  const valid = questions.every(q => q && typeof q.question === 'string' && Array.isArray(q.options) && q.options.length > 0);
+  if (!valid) return null;
+
+  return { tool: 'AskUserQuestion', questions };
+}
+
+function QuestionOptions({ question, qi, selected, interactive, onToggle }) {
+  return (
+    <div className="cv-question-block">
+      {question.header && <div className="cv-question-header">{question.header}</div>}
+      <div className="cv-question-text">{question.question}</div>
+      <div className="cv-question-options">
+        {question.options.map(opt => (
+          <button
+            key={opt.label}
+            type="button"
+            disabled={!interactive}
+            className={`cv-question-option ${selected.has(opt.label) ? 'selected' : ''}`}
+            onClick={() => onToggle(qi, opt.label, question.multiSelect)}
+          >
+            <span className="cv-question-option-label">{opt.label}</span>
+            {opt.description && <span className="cv-question-option-desc">{opt.description}</span>}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AskUserQuestionCard({ questions, interactive, onAnswer }) {
+  const [selections, setSelections] = useState(() => questions.map(() => new Set()));
+  const [activeTab, setActiveTab] = useState(0);
+  const tabbed = questions.length > 1;
+  const isLastTab = activeTab === questions.length - 1;
+  const allAnswered = questions.every((_, i) => selections[i].size > 0);
+
+  function toggle(qIdx, label, multiSelect) {
+    setSelections(prev => {
+      const next = prev.map(s => new Set(s));
+      if (multiSelect) {
+        next[qIdx].has(label) ? next[qIdx].delete(label) : next[qIdx].add(label);
+      } else {
+        next[qIdx] = new Set([label]);
+      }
+      return next;
+    });
+    // Single-select answers advance the flow themselves; multiSelect needs an
+    // explicit Next since "one tap" doesn't mean "done picking" for those.
+    if (!multiSelect && tabbed && qIdx < questions.length - 1) {
+      setActiveTab(qIdx + 1);
+    }
+  }
+
+  function submit() {
+    const reply = questions
+      .map((q, i) => `${q.header ? q.header + ': ' : ''}${[...selections[i]].join(', ')}`)
+      .join('\n');
+    onAnswer(reply);
+  }
+
+  if (!interactive) {
+    return (
+      <div className="cv-question-card cv-question-answered">
+        {questions.map((q, qi) => (
+          <QuestionOptions key={qi} question={q} qi={qi} selected={selections[qi]} interactive={false} onToggle={() => {}} />
+        ))}
+      </div>
+    );
+  }
+
+  if (!tabbed) {
+    return (
+      <div className="cv-question-card">
+        <QuestionOptions question={questions[0]} qi={0} selected={selections[0]} interactive onToggle={toggle} />
+        <button className="cv-question-submit" disabled={!allAnswered} onClick={submit}>
+          Submit
+        </button>
+      </div>
+    );
+  }
+
+  const active = questions[activeTab];
+  return (
+    <div className="cv-question-card cv-question-tabbed">
+      <div className="cv-question-tabs" role="tablist">
+        {questions.map((q, i) => (
+          <button
+            key={i}
+            type="button"
+            role="tab"
+            aria-selected={i === activeTab}
+            className={`cv-question-tab ${i === activeTab ? 'active' : ''} ${selections[i].size > 0 ? 'answered' : ''}`}
+            onClick={() => setActiveTab(i)}
+          >
+            {q.header || `Q${i + 1}`}
+          </button>
+        ))}
+      </div>
+      <QuestionOptions question={active} qi={activeTab} selected={selections[activeTab]} interactive onToggle={toggle} />
+      <div className="cv-question-nav">
+        {isLastTab ? (
+          <button className="cv-question-submit" disabled={!allAnswered} onClick={submit}>
+            Submit
+          </button>
+        ) : active.multiSelect ? (
+          <button
+            type="button"
+            className="cv-question-next"
+            disabled={selections[activeTab].size === 0}
+            onClick={() => setActiveTab(activeTab + 1)}
+          >
+            Next
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+const INTERACTIVE_QUESTION_RENDERERS = {
+  AskUserQuestion: AskUserQuestionCard,
+};
+// Any other recognized-but-unspecialized question shape falls back to the same card —
+// kept as a distinct name so a future tool can get bespoke rendering without touching this one.
+const GenericQuestionCard = AskUserQuestionCard;
+
+// ============================================================================
 // Diff sheet — "N files changed" summary for Edit/Write tool calls
 // ============================================================================
+// Aggregates every Edit/Write tool_use across the whole loaded session
+// (unlike buildDiffBlocks, which is scoped to one message) into a flat file
+// list for the Git Diff sheet's "Edited this session" tab.
+function collectSessionChangedFiles(messages) {
+  const fileMap = new Map(); // path -> isNew
+  for (const msg of messages) {
+    if (msg.role !== 'assistant') continue;
+    for (const part of msg.parts || []) {
+      if (part.type !== 'tool_use') continue;
+      if (part.name === 'Edit' && part.input?.file_path) {
+        if (!fileMap.has(part.input.file_path)) fileMap.set(part.input.file_path, false);
+      } else if (part.name === 'Write' && part.input?.file_path) {
+        fileMap.set(part.input.file_path, true);
+      }
+    }
+  }
+  return Array.from(fileMap.entries()).map(([path, isNew]) => ({ path, status: isNew ? 'added' : 'modified' }));
+}
+
 function buildDiffBlocks(parts) {
   const fileMap = new Map(); // path → { oldLines, newLines }
 
@@ -1098,7 +1340,7 @@ const MarkdownText = memo(function MarkdownText({ text }) {
   return <div dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
-const MessageBubble = memo(function MessageBubble({ msg, index, isStreaming, editingMsg, onEditStart, onEditCancel, onEditResend }) {
+const MessageBubble = memo(function MessageBubble({ msg, index, isLastMessage, isStreaming, editingMsg, onEditStart, onEditCancel, onEditResend, onAnswerQuestion }) {
   const [copied, setCopied] = useState(false);
   const [showCost, setShowCost] = useState(false);
   const longPressTimer = useRef(null);
@@ -1129,7 +1371,6 @@ const MessageBubble = memo(function MessageBubble({ msg, index, isStreaming, edi
               defaultValue={editingMsg.text}
               autoFocus
               onKeyDown={e => {
-                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onEditResend(index, e.target.value); }
                 if (e.key === 'Escape') onEditCancel();
               }}
             />
@@ -1172,11 +1413,22 @@ const MessageBubble = memo(function MessageBubble({ msg, index, isStreaming, edi
         <div className="cv-assistant-dot" />
         <div className="cv-assistant-content">
           <div className="cv-msg-body cv-assistant-body">
-            {parts.map((part, i) =>
-              part.type === 'text'
-                ? <MarkdownText key={i} text={part.text} />
-                : <ToolChip key={i} part={part} />
-            )}
+            {parts.map((part, i) => {
+              if (part.type !== 'text') return <ToolChip key={i} part={part} />;
+              const question = parseInteractiveQuestion(part.text);
+              if (question) {
+                const Renderer = INTERACTIVE_QUESTION_RENDERERS[question.tool] || GenericQuestionCard;
+                return (
+                  <Renderer
+                    key={i}
+                    questions={question.questions}
+                    interactive={isLastMessage && !isStreaming}
+                    onAnswer={onAnswerQuestion}
+                  />
+                );
+              }
+              return <MarkdownText key={i} text={part.text} />;
+            })}
           </div>
           <div className="cv-assistant-footer">
             {hasText && (

@@ -1,0 +1,30 @@
+.dvp-root {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+}
+.dvp-header {
+  padding: calc(var(--safe-top) + 12px) 16px 10px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.dvp-filename {
+  font-size: 15px;
+  font-weight: 600;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+.dvp-body {
+  flex: 1;
+  overflow: auto;
+  padding-bottom: var(--safe-bottom);
+}
+.dvp-message {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+.dvp-message a { color: var(--accent); }
