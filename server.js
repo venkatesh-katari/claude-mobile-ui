@@ -1,7 +1,7 @@
 import express from 'express';
-import { spawn, execSync } from 'node:child_process';
+import { spawn, execSync, execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, readdirSync, existsSync, createReadStream, statSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve, sep } from 'node:path';
 import { homedir, networkInterfaces } from 'node:os';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +16,14 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3456;
 const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects');
+const CLAUDE_IDE_DIR = join(homedir(), '.claude', 'ide');
 const ACCESS_PIN = process.env.ACCESS_PIN || '';
+
+// Tag every claude process this server spawns with a distinct
+// CLAUDE_CODE_ENTRYPOINT so we can later tell, from a session's JSONL alone,
+// whether mobile or something else (desktop CLI, VSCode/Cursor) last touched
+// it. See docs/session-conflict-detection.md for the full mechanism.
+const MOBILE_ENTRYPOINT = 'claude-mobile-ui';
 
 // ============================================================================
 // PIN authentication middleware
@@ -69,7 +76,7 @@ app.use('/api', pinAuth);
 
 // Track active Claude processes and their buffered output for reconnect
 const activeProcesses = new Map();
-const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT || '2', 10);
+const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT || '3', 10);
 // streamBuffers: processId -> { events: [...], done: bool }
 const streamBuffers = new Map();
 // activeSessionIds: sessionId -> processId — detect desktop/mobile conflicts
@@ -578,7 +585,7 @@ app.post('/api/chat', (req, res) => {
   console.log(`[chat] spawning claude with args: ${args.join(' ')}, cwd: ${cwd}`);
   const claudeProcess = spawn('claude', args, {
     cwd,
-    env: { ...process.env, ENABLE_SECURITY_REMINDER: '0' },
+    env: { ...process.env, ENABLE_SECURITY_REMINDER: '0', CLAUDE_CODE_ENTRYPOINT: MOBILE_ENTRYPOINT },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   console.log(`[chat] claude process pid: ${claudeProcess.pid}`);
@@ -591,10 +598,20 @@ app.post('/api/chat', (req, res) => {
   const streamBuf = { events: [], done: false };
   streamBuffers.set(processId, streamBuf);
 
+  // The client disconnecting must not affect claudeProcess in any way — it
+  // keeps running and writing to streamBuf regardless. res.write()/res.end()
+  // on a closed connection can throw (write-after-end) or emit an unhandled
+  // 'error', which would crash the whole server and take every other
+  // in-flight session down with it, so writes are guarded and errors swallowed.
+  let clientConnected = true;
+  res.on('error', () => {}); // swallow — e.g. ECONNRESET from a closed mobile connection
+
   function emitEvent(obj) {
     const data = `data: ${JSON.stringify(obj)}\n\n`;
     streamBuf.events.push(obj);
-    res.write(data);
+    if (clientConnected) {
+      try { res.write(data); } catch {}
+    }
   }
 
   // Send the process ID so the client can abort/reconnect
@@ -699,7 +716,7 @@ app.post('/api/chat', (req, res) => {
     }
     emitEvent({ type: 'done', exitCode: code });
     streamBuf.done = true;
-    res.end();
+    if (clientConnected) { try { res.end(); } catch {} }
     activeProcesses.delete(processId);
     if (sessionId) activeSessionIds.delete(sessionId);
     setTimeout(() => streamBuffers.delete(processId), 5 * 60 * 1000);
@@ -708,7 +725,7 @@ app.post('/api/chat', (req, res) => {
   claudeProcess.on('error', (err) => {
     emitEvent({ type: 'error', message: err.message });
     streamBuf.done = true;
-    res.end();
+    if (clientConnected) { try { res.end(); } catch {} }
     activeProcesses.delete(processId);
     if (sessionId) activeSessionIds.delete(sessionId);
     setTimeout(() => streamBuffers.delete(processId), 5 * 60 * 1000);
@@ -716,6 +733,7 @@ app.post('/api/chat', (req, res) => {
 
   let processFinished = false;
   res.on('close', () => {
+    clientConnected = false;
     console.log(`[chat] response closed, processFinished=${processFinished}`);
     // Keep process alive — client can reconnect via /api/stream/:processId/replay
     // Process will clean itself up when Claude finishes
@@ -736,32 +754,37 @@ app.get('/api/stream/:processId/replay', (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
+  let clientConnected = true;
+  res.on('error', () => {}); // swallow — e.g. ECONNRESET from a closed mobile connection
+
   // Replay all buffered events
   for (const obj of buf.events) {
-    res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    if (!clientConnected) break;
+    try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { clientConnected = false; }
   }
 
   if (buf.done) {
-    res.end();
+    if (clientConnected) { try { res.end(); } catch {} }
     return;
   }
 
   // Process is still running — attach as a live listener by polling the buffer length
   let lastIndex = buf.events.length;
   const interval = setInterval(() => {
+    if (!clientConnected) { clearInterval(interval); return; }
     const newEvents = buf.events.slice(lastIndex);
     for (const obj of newEvents) {
-      res.write(`data: ${JSON.stringify(obj)}\n\n`);
+      try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { clientConnected = false; }
     }
     lastIndex = buf.events.length;
 
     if (buf.done) {
       clearInterval(interval);
-      res.end();
+      if (clientConnected) { try { res.end(); } catch {} }
     }
   }, 100);
 
-  res.on('close', () => clearInterval(interval));
+  res.on('close', () => { clientConnected = false; clearInterval(interval); });
 });
 
 // ============================================================================
@@ -771,6 +794,18 @@ app.get('/api/streams/active', (_req, res) => {
   const active = [];
   for (const [id, buf] of streamBuffers) {
     if (!buf.done) active.push(id);
+  }
+  res.json(active);
+});
+
+// API: List active streams with their sessionId, so a client that lost its
+// remembered processId (new device, sessionStorage wiped, app relaunched)
+// can still discover a workflow still running for the session it opened.
+app.get('/api/streams/active-by-session', (_req, res) => {
+  const active = [];
+  for (const [sid, processId] of activeSessionIds) {
+    const buf = streamBuffers.get(processId);
+    if (buf && !buf.done) active.push({ sessionId: sid, processId });
   }
   res.json(active);
 });
@@ -814,6 +849,60 @@ app.post('/api/sessions/:sessionId/takeover', (req, res) => {
   if (buf) { buf.done = true; }
 
   res.json({ ok: true, wasActive: true });
+});
+
+// ============================================================================
+// API: Check whether opening a session on mobile risks a real desktop
+// conflict (see docs/session-conflict-detection.md)
+// ============================================================================
+app.get('/api/sessions/:sessionId/conflict-check', (req, res) => {
+  const { sessionId } = req.params;
+
+  // Already streaming through this server — our own in-progress stream, not
+  // a conflict (caller should reconnect, not warn).
+  if (activeSessionIds.has(sessionId)) {
+    return res.json({ conflict: false });
+  }
+
+  const jsonlPath = findSessionFile(sessionId);
+  if (!jsonlPath) return res.json({ conflict: false });
+
+  const { cwd, lastEntrypoint } = getSessionOrigin(jsonlPath);
+
+  // Last activity on this session came from mobile itself — safe.
+  if (lastEntrypoint === MOBILE_ENTRYPOINT) {
+    return res.json({ conflict: false });
+  }
+
+  // Last activity came from somewhere else (desktop CLI, VSCode/Cursor, or
+  // an untagged pre-existing session) — only warn if that origin looks live
+  // right now, via an IDE lock file matching this project.
+  const conflict = isDesktopLiveForCwd(cwd);
+  res.json({ conflict, reason: conflict ? 'desktop-live' : null });
+});
+
+// ============================================================================
+// API: Git diff — repo detection, working-tree status, per-file unified diff
+// ============================================================================
+app.get('/api/git/status', (req, res) => {
+  try {
+    const cwd = req.query.cwd;
+    if (!cwd || !existsSync(cwd)) return res.status(400).json({ error: 'Invalid cwd' });
+    res.json(getGitStatus(cwd));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/git/diff', (req, res) => {
+  try {
+    const { cwd, file } = req.query;
+    if (!cwd || !existsSync(cwd)) return res.status(400).json({ error: 'Invalid cwd' });
+    if (!file) return res.status(400).json({ error: 'file is required' });
+    res.json({ diff: getGitDiff(cwd, file) });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // ============================================================================
@@ -889,6 +978,114 @@ function deriveCwdFromProjectDir(projectDir, dirName) {
     }
   } catch {}
   return dirName.replace(/^-/, '/').replace(/-/g, '/');
+}
+
+// Reads a session's JSONL once and returns its cwd (present on every line)
+// and the entrypoint recorded on its most recent `user` line — lets callers
+// tell whether mobile (MOBILE_ENTRYPOINT) or something else (desktop CLI,
+// VSCode/Cursor) last touched the session.
+function getSessionOrigin(filePath) {
+  const content = readFileSync(filePath, 'utf-8');
+  const lines = content.split('\n').filter(l => l.trim());
+  let cwd = '';
+  let lastEntrypoint = '';
+  for (const line of lines) {
+    let obj;
+    try { obj = JSON.parse(line); } catch { continue; }
+    if (obj.cwd && !cwd) cwd = obj.cwd;
+    if (obj.type === 'user' && obj.entrypoint) lastEntrypoint = obj.entrypoint;
+  }
+  return { cwd, lastEntrypoint };
+}
+
+// Detects a live desktop/IDE-integrated `claude` session for a project by
+// reading ~/.claude/ide/<pid>.lock files (written by the CLI's IDE
+// integration — one per running IDE-attached session), checking both that
+// the PID is still alive and its workspaceFolders includes this cwd.
+// Project-level granularity only: can't pin to a specific sessionId, and
+// misses a desktop session running in a plain (non-IDE) terminal.
+function isDesktopLiveForCwd(cwd) {
+  if (!cwd || !existsSync(CLAUDE_IDE_DIR)) return false;
+  let lockFiles = [];
+  try {
+    lockFiles = readdirSync(CLAUDE_IDE_DIR).filter(f => f.endsWith('.lock'));
+  } catch { return false; }
+
+  for (const file of lockFiles) {
+    try {
+      const data = JSON.parse(readFileSync(join(CLAUDE_IDE_DIR, file), 'utf-8'));
+      if (!data.pid || !Array.isArray(data.workspaceFolders)) continue;
+      const matches = data.workspaceFolders.some(wf => wf === cwd || cwd.startsWith(wf + '/'));
+      if (!matches) continue;
+      try {
+        process.kill(data.pid, 0); // throws if PID is not running
+        return true;
+      } catch { /* stale lock file — PID is dead, keep checking others */ }
+    } catch { /* unreadable/malformed lock file, skip */ }
+  }
+  return false;
+}
+
+// Detects whether cwd is a git repo and, if so, lists working-tree changes
+// (tracked + untracked) via `git status --porcelain=v1`. Paths come back
+// relative to cwd (git's default `status.relativePaths` behavior), which
+// matters because getGitDiff() below is called with exactly these paths.
+function getGitStatus(cwd) {
+  try {
+    execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd, stdio: ['ignore', 'ignore', 'ignore'] });
+  } catch {
+    return { isRepo: false, files: [] };
+  }
+
+  let out = '';
+  try {
+    out = execFileSync('git', ['status', '--porcelain=v1'], { cwd, encoding: 'utf-8' });
+  } catch {
+    return { isRepo: true, files: [] };
+  }
+
+  const STATUS_LABELS = { M: 'modified', A: 'added', D: 'deleted', R: 'renamed', C: 'copied', U: 'conflicted' };
+  const files = out.split('\n').filter(Boolean).map(line => {
+    if (line.startsWith('??')) return { path: line.slice(3), status: 'untracked' };
+    const code = line[0] !== ' ' ? line[0] : line[1];
+    let path = line.slice(3);
+    if (path.includes(' -> ')) path = path.split(' -> ')[1]; // renames: "old -> new"
+    return { path, status: STATUS_LABELS[code] || 'modified' };
+  });
+  return { isRepo: true, files };
+}
+
+// Returns a real unified diff for one file, scoped to cwd. Uses execFileSync
+// (argv-based, no shell) rather than execSync so a crafted `file` value from
+// the client can't break out into shell syntax.
+function getGitDiff(cwd, file) {
+  const resolvedCwd = resolve(cwd);
+  const resolvedFile = resolve(cwd, file);
+  if (resolvedFile !== resolvedCwd && !resolvedFile.startsWith(resolvedCwd + sep)) {
+    throw new Error('file must be inside cwd');
+  }
+
+  let statusLine = '';
+  try {
+    statusLine = execFileSync('git', ['status', '--porcelain=v1', '--', file], { cwd, encoding: 'utf-8' }).trim();
+  } catch { /* not a repo / git failure — fall through, diff attempts below will also fail cleanly */ }
+
+  // Untracked files have no HEAD entry, so `git diff HEAD` shows nothing for
+  // them — diff against /dev/null instead so new files render as all-additions.
+  if (statusLine.startsWith('??')) {
+    try {
+      return execFileSync('git', ['diff', '--no-index', '--', '/dev/null', file], { cwd, encoding: 'utf-8' });
+    } catch (err) {
+      // git diff --no-index exits 1 when the files differ — that's the normal case, not a failure
+      return err.stdout || '';
+    }
+  }
+
+  try {
+    return execFileSync('git', ['diff', 'HEAD', '--', file], { cwd, encoding: 'utf-8' });
+  } catch (err) {
+    return err.stdout || '';
+  }
 }
 
 function titleOverridesPath(projectDir) {
