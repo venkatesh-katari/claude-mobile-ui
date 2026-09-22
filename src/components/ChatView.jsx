@@ -7,11 +7,13 @@ import {
   FileText, FilePen, Terminal, Search, Globe, List, BookOpen,
   Wrench, Sun, Moon, Download, Check, ChevronDown, ChevronUp, ChevronRight, Copy,
   RotateCcw, WifiOff, Square, ArrowDown, Clock, Pencil, AtSign,
-  DollarSign, X, History, Slash, Sparkles, Plus, GitCompare
+  X, History, Slash, Sparkles, Plus, GitCompare
 } from 'lucide-react';
 import { copyToClipboard } from '../utils/clipboard';
 import { apiFetch } from '../utils/api';
+import { renderMermaidDiagram } from '../utils/mermaid';
 import { useWakeLock } from '../utils/useWakeLock';
+import { appendTextDelta, completeTurn, finishStream, upsertToolEvent } from '../chat/events';
 import Explorer from './Explorer';
 import NewChatSetup from './NewChatSetup';
 import GitDiffSheet from './GitDiffSheet';
@@ -22,6 +24,18 @@ let codeBlockId = 0;
 const renderer = new marked.Renderer();
 renderer.code = function ({ text, lang }) {
   const id = `code-${++codeBlockId}`;
+  const language = (lang || '').trim().split(/\s+/)[0].toLowerCase();
+  if (language === 'mermaid') {
+    return `<div class="cv-mermaid-wrap" data-mermaid-block>
+      <div class="cv-mermaid-stage" role="img" aria-label="Mermaid diagram" aria-busy="true">
+        <span class="cv-mermaid-loading">Rendering diagram…</span>
+      </div>
+      <details class="cv-mermaid-source">
+        <summary>View Mermaid source</summary>
+        <pre><code id="${id}">${escapeHtml(text)}</code></pre>
+      </details>
+    </div>`;
+  }
   const langLabel = lang ? `<span class="cv-code-lang">${lang}</span>` : '';
   const highlighted =
     lang && hljs.getLanguage(lang)
@@ -51,26 +65,34 @@ window.__copyCode = (id, btn) => {
   });
 };
 
-const ACTIVE_PROCESS_KEY = 'claude_mobile_active_process';
+const ACTIVE_PROCESS_KEY = 'agent_mobile_active_process';
+
+function readActiveProcess() {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(ACTIVE_PROCESS_KEY) || 'null');
+    if (!value || typeof value.id !== 'string' || typeof value.backend !== 'string') return null;
+    return value;
+  } catch {
+    // Raw process IDs from older releases cannot be safely associated with a
+    // backend. Discard them and use server-side session discovery instead.
+    sessionStorage.removeItem(ACTIVE_PROCESS_KEY);
+    return null;
+  }
+}
+
+function saveActiveProcess(id, backend, sessionId = null) {
+  sessionStorage.setItem(ACTIVE_PROCESS_KEY, JSON.stringify({ id, backend, sessionId }));
+}
+
+function clearActiveProcess(id = null) {
+  const current = readActiveProcess();
+  if (!id || !current || current.id === id) sessionStorage.removeItem(ACTIVE_PROCESS_KEY);
+}
 
 // ============================================================================
 // Overflow menu (⋯)
 // ============================================================================
-const MODELS = [
-  { value: 'claude-sonnet-5', label: 'Sonnet', desc: 'Best balance of speed & quality' },
-  { value: 'claude-opus-4-8', label: 'Opus', desc: 'Most capable, slower' },
-  { value: 'haiku',  label: 'Haiku',  desc: 'Fastest, lightest tasks' },
-];
-
-const MODES = [
-  { value: 'plan',               label: 'Plan',         desc: 'Read-only, no changes' },
-  { value: 'acceptEdits',        label: 'Accept Edits', desc: 'Auto-approve file edits' },
-  { value: 'auto',               label: 'Auto',         desc: 'Approve everything' },
-  { value: 'default',            label: 'Default',      desc: 'Deny tools needing permission' },
-  { value: 'bypassPermissions',  label: 'Bypass',       desc: 'Skip all permission checks' },
-];
-
-function OverflowMenu({ theme, onToggleTheme, onExport, canExport, permissionMode, onPermissionChange, model, onModelChange }) {
+function OverflowMenu({ theme, onToggleTheme, onExport, canExport, permissionMode, onPermissionChange, model, onModelChange, models, permissionModes }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -84,14 +106,14 @@ function OverflowMenu({ theme, onToggleTheme, onExport, canExport, permissionMod
             <div className="cv-menu-handle" />
 
             <div className="cv-menu-section-label">Model</div>
-            {MODELS.map(m => (
+            {models.map(m => (
               <button
                 key={m.value}
                 className={`cv-menu-item ${model === m.value ? 'active' : ''}`}
                 onClick={() => { onModelChange(m.value); setOpen(false); }}
               >
                 <span className="cv-menu-item-label">{m.label}</span>
-                <span className="cv-menu-item-desc">{m.desc}</span>
+                <span className="cv-menu-item-desc">{m.description}</span>
                 {model === m.value && <Check size={14} className="cv-menu-check" />}
               </button>
             ))}
@@ -99,14 +121,14 @@ function OverflowMenu({ theme, onToggleTheme, onExport, canExport, permissionMod
             <div className="cv-menu-divider" />
 
             <div className="cv-menu-section-label">Permission Mode</div>
-            {MODES.map(m => (
+            {permissionModes.map(m => (
               <button
                 key={m.value}
                 className={`cv-menu-item ${permissionMode === m.value ? 'active' : ''}`}
                 onClick={() => { onPermissionChange(m.value); setOpen(false); }}
               >
                 <span className="cv-menu-item-label">{m.label}</span>
-                <span className="cv-menu-item-desc">{m.desc}</span>
+                <span className="cv-menu-item-desc">{m.description}</span>
                 {permissionMode === m.value && <Check size={14} className="cv-menu-check" />}
               </button>
             ))}
@@ -140,7 +162,8 @@ function OverflowMenu({ theme, onToggleTheme, onExport, canExport, permissionMod
 // Main ChatView
 // ============================================================================
 export default function ChatView({ chatState, onBack, onUpdateState, theme, onToggleTheme }) {
-  const { sessionId, projectPath, title, permissionMode, model = 'claude-sonnet-5' } = chatState;
+  const { backend = 'claude', sessionId, projectPath, title, permissionMode, model = 'claude-sonnet-5' } = chatState;
+  const [backendDescriptors, setBackendDescriptors] = useState([]);
   const [messages, setMessages] = useState([]);
   const [isStreaming, setIsStreaming] = useState(false);
   useWakeLock(isStreaming);
@@ -154,6 +177,8 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   const [activeToolStatus, setActiveToolStatus] = useState(null); // "Writing server.js…"
   const [atBottom, setAtBottom] = useState(true);
   const [sessionCost, setSessionCost] = useState(0);
+  const [sessionTokens, setSessionTokens] = useState(0);
+  const [runtimeWarning, setRuntimeWarning] = useState(null);
   const [promptHistory, setPromptHistory] = useState(() => {
     try { return JSON.parse(localStorage.getItem('cv_prompt_history') || '[]'); } catch { return []; }
   });
@@ -171,7 +196,29 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   const containerRef = useRef(null);
   const abortRef = useRef(null);
   const processIdRef = useRef(null);
-  const assistantTextRef = useRef('');
+  const streamCreatedSessionRef = useRef(null);
+
+  const backendDescriptor = backendDescriptors.find(item => item.id === backend) || {
+    id: backend,
+    label: backend === 'codex' ? 'Codex CLI' : 'Claude Code',
+    models: [],
+    permissionModes: [],
+    capabilities: {
+      conflictDetection: backend === 'claude',
+      dollarCost: backend === 'claude',
+      interactiveQuestions: backend === 'claude',
+      partialTextStreaming: backend === 'claude',
+      skillsPicker: backend === 'claude',
+      toolUse: true,
+    },
+  };
+
+  useEffect(() => {
+    apiFetch('/api/backends')
+      .then(response => response.ok ? response.json() : Promise.reject())
+      .then(setBackendDescriptors)
+      .catch(() => {});
+  }, []);
 
   const insertPath = useCallback((path) => {
     setInputText(prev => {
@@ -184,9 +231,10 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   useEffect(() => {
     if (sessionId) {
       setIsNewChat(false);
+      if (streamCreatedSessionRef.current === sessionId) return;
       loadMessages(sessionId);
     }
-  }, [sessionId]);
+  }, [backend, sessionId]);
 
   // Reconnect to an in-progress workflow. Prefer the processId this tab
   // already remembers (cheap, no round trip); if that's gone — new device,
@@ -194,20 +242,24 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   // to asking the server whether *this* session has a stream still running,
   // so the workflow surviving a dropped connection is actually discoverable.
   useEffect(() => {
-    const savedProcessId = sessionStorage.getItem(ACTIVE_PROCESS_KEY);
-    if (savedProcessId) {
-      reconnectToStream(savedProcessId);
+    if (processIdRef.current || isStreaming) return;
+    const savedProcess = readActiveProcess();
+    const savedProcessMatches = savedProcess
+      && savedProcess.backend === backend
+      && (!sessionId || !savedProcess.sessionId || savedProcess.sessionId === sessionId);
+    if (savedProcessMatches) {
+      reconnectToStream(savedProcess.id);
       return;
     }
     if (!sessionId) return;
     apiFetch('/api/streams/active-by-session')
       .then(r => r.ok ? r.json() : [])
       .then(active => {
-        const match = active.find(a => a.sessionId === sessionId);
+        const match = active.find(a => a.backend === backend && a.sessionId === sessionId);
         if (match) reconnectToStream(match.processId);
       })
       .catch(() => {});
-  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [backend, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Gate the "+" sheet's Git Diff item on the project actually being a git
   // repo — cheap check, refreshed whenever the working directory changes.
@@ -225,7 +277,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
     setLoadingMessages(true);
     setLoadError(false);
     try {
-      const res = await apiFetch(`/api/sessions/${sid}/messages`);
+      const res = await apiFetch(`/api/sessions/${sid}/messages?backend=${encodeURIComponent(backend)}`);
       if (!res.ok) throw new Error(`Server returned ${res.status}`);
       const msgs = await res.json();
       setMessages(msgs);
@@ -240,12 +292,13 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   async function reconnectToStream(pid) {
     try {
       const res = await apiFetch(`/api/stream/${pid}/replay`);
-      if (!res.ok) { sessionStorage.removeItem(ACTIVE_PROCESS_KEY); return; }
+      if (!res.ok) { clearActiveProcess(pid); return; }
       setIsStreaming(true);
       processIdRef.current = pid;
+      saveActiveProcess(pid, backend, sessionId);
       await consumeSSEStream(res);
     } catch {
-      sessionStorage.removeItem(ACTIVE_PROCESS_KEY);
+      clearActiveProcess(pid);
     }
   }
 
@@ -290,7 +343,11 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   useEffect(() => {
     function onVisible() {
       if (document.visibilityState !== 'visible') return;
-      const pid = sessionStorage.getItem(ACTIVE_PROCESS_KEY) || resumablePid;
+      const savedProcess = readActiveProcess();
+      const savedProcessMatches = savedProcess
+        && savedProcess.backend === backend
+        && (!sessionId || !savedProcess.sessionId || savedProcess.sessionId === sessionId);
+      const pid = savedProcessMatches ? savedProcess.id : resumablePid;
       if (!pid || isStreaming) return;
       setResumablePid(null);
       reconnectToStream(pid);
@@ -321,66 +378,37 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
 
             if (obj.type === 'process-id') {
               processIdRef.current = obj.id;
-              sessionStorage.setItem(ACTIVE_PROCESS_KEY, obj.id);
-            } else if (obj.type === 'assistant') {
-              const content = obj.message?.content || [];
-              for (const block of content) {
-                if (block.type === 'text') {
-                  assistantTextRef.current += block.text;
-                  const text = assistantTextRef.current;
-                  setMessages(prev => {
-                    const updated = [...prev];
-                    const last = updated[updated.length - 1];
-                    if (last?.role === 'assistant' && last._streaming) {
-                      updated[updated.length - 1] = { ...last, parts: [{ type: 'text', text }] };
-                    } else {
-                      updated.push({ role: 'assistant', parts: [{ type: 'text', text }], _streaming: true });
-                    }
-                    return updated;
-                  });
-                } else if (block.type === 'tool_use') {
-                  // Update active tool status line
-                  const summary = getToolSummary(block.name, block.input);
-                  setActiveToolStatus(summary ? `${block.name} · ${summary}` : block.name);
-                  setMessages(prev => {
-                    const updated = [...prev];
-                    const last = updated[updated.length - 1];
-                    const toolPart = { type: 'tool_use', name: block.name, input: block.input, id: block.id };
-                    if (last?.role === 'assistant' && last._streaming) {
-                      const parts = [...last.parts];
-                      const ei = parts.findIndex(p => p.type === 'tool_use' && p.id === block.id);
-                      if (ei >= 0) parts[ei] = toolPart; else parts.push(toolPart);
-                      updated[updated.length - 1] = { ...last, parts };
-                    } else {
-                      updated.push({ role: 'assistant', parts: [toolPart], _streaming: true });
-                    }
-                    return updated;
-                  });
-                }
+              saveActiveProcess(obj.id, backend, sessionId);
+            } else if (obj.type === 'session-started') {
+              if (obj.sessionId) {
+                if (!sessionId) streamCreatedSessionRef.current = obj.sessionId;
+                if (processIdRef.current) saveActiveProcess(processIdRef.current, backend, obj.sessionId);
+                onUpdateState({ backend, sessionId: obj.sessionId });
               }
-            } else if (obj.type === 'result') {
-              if (obj.session_id) onUpdateState({ sessionId: obj.session_id });
-              if (obj.total_cost_usd) {
-                setSessionCost(prev => prev + obj.total_cost_usd);
-                setMessages(prev => {
-                  const updated = [...prev];
-                  const last = updated[updated.length - 1];
-                  if (last?.role === 'assistant') {
-                    updated[updated.length - 1] = { ...last, _streaming: false, cost: obj.total_cost_usd, duration: obj.duration_ms };
-                  }
-                  return updated;
-                });
+            } else if (obj.type === 'text-delta') {
+              setMessages(previous => appendTextDelta(previous, obj.text));
+            } else if (obj.type === 'tool-use') {
+              const summary = getToolSummary(obj.name, obj.input);
+              if (obj.status === 'completed' || obj.status === 'failed') setActiveToolStatus(null);
+              else setActiveToolStatus(summary ? `${obj.name} · ${summary}` : obj.name);
+              setMessages(previous => upsertToolEvent(previous, obj));
+            } else if (obj.type === 'warning') {
+              setRuntimeWarning(obj.message);
+            } else if (obj.type === 'error') {
+              setRuntimeWarning(`Agent error: ${obj.message}`);
+            } else if (obj.type === 'turn-complete') {
+              if (obj.sessionId) onUpdateState({ backend, sessionId: obj.sessionId });
+              if (obj.cost?.usd) setSessionCost(previous => previous + obj.cost.usd);
+              if (obj.cost?.tokens) {
+                const usage = obj.cost.tokens;
+                setSessionTokens(previous => previous + (usage.inputTokens || 0) + (usage.outputTokens || 0));
               }
+              setMessages(previous => completeTurn(previous, obj));
               setActiveToolStatus(null);
-            } else if (obj.type === 'done') {
+            } else if (obj.type === 'stream-complete') {
               streamDone = true;
               setActiveToolStatus(null);
-              setMessages(prev => {
-                const updated = [...prev];
-                const last = updated[updated.length - 1];
-                if (last?.role === 'assistant') updated[updated.length - 1] = { ...last, _streaming: false };
-                return updated;
-              });
+              setMessages(finishStream);
               notifyCompletion();
             }
           } catch { /* skip parse errors */ }
@@ -389,22 +417,24 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
     } finally {
       // If the stream closed without a done event, the server process may still be running.
       // Save the pid so the user can resume instead of retrying.
-      if (!streamDone && processIdRef.current && abortRef.current && !abortRef.current.signal.aborted) {
-        setResumablePid(processIdRef.current);
+      const processId = processIdRef.current;
+      const wasAborted = abortRef.current?.signal.aborted === true;
+      if (!streamDone && processId && !wasAborted) {
+        setResumablePid(processId);
+      } else {
+        clearActiveProcess(processId);
       }
       setIsStreaming(false);
       setActiveToolStatus(null);
-      assistantTextRef.current = '';
       processIdRef.current = null;
       abortRef.current = null;
-      sessionStorage.removeItem(ACTIVE_PROCESS_KEY);
     }
   }
 
   function notifyCompletion() {
     if (document.hidden) {
-      document.title = '✓ Claude replied — Claude Mobile';
-      const restore = () => { document.title = 'Claude Mobile'; document.removeEventListener('visibilitychange', restore); };
+      document.title = `✓ ${backendDescriptor.label} replied — Agent Mobile`;
+      const restore = () => { document.title = 'Agent Mobile'; document.removeEventListener('visibilitychange', restore); };
       document.addEventListener('visibilitychange', restore);
     }
     try {
@@ -419,7 +449,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
       osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.3);
     } catch {}
     if ('Notification' in window && Notification.permission === 'granted' && document.hidden) {
-      new Notification('Claude replied', { body: 'Your response is ready.', icon: '/icon-192.svg', tag: 'claude-reply' });
+      new Notification(`${backendDescriptor.label} replied`, { body: 'Your response is ready.', icon: '/icon-192.svg', tag: 'agent-reply' });
     }
   }
 
@@ -432,7 +462,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
     setResumablePid(null);
     setIsNewChat(false);
     setAtBottom(true);
-    assistantTextRef.current = '';
+    setRuntimeWarning(null);
     // Save to prompt history (deduplicated, max 20)
     if (!overrideText) {
       setPromptHistory(prev => {
@@ -455,14 +485,15 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
       const res = await apiFetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, sessionId, projectPath, permissionMode, model }),
+        body: JSON.stringify({ backend, message: text, sessionId, projectPath, permissionMode, model }),
         signal: abortRef.current.signal,
       });
 
       if (res.status === 429) {
         await res.json();
-        setSendError({ text, reason: 'Claude is busy — try again shortly' });
+        setSendError({ text, reason: 'Agent capacity reached — try again shortly' });
         setIsStreaming(false);
+        abortRef.current = null;
         return;
       }
 
@@ -471,6 +502,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
         try { const d = await res.json(); if (d.error) reason = d.error; } catch {}
         setSendError({ text, reason });
         setIsStreaming(false);
+        abortRef.current = null;
         return;
       }
 
@@ -478,22 +510,21 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
     } catch (err) {
       if (err.name === 'AbortError') {
         setIsStreaming(false);
-        assistantTextRef.current = '';
         processIdRef.current = null;
         abortRef.current = null;
-        sessionStorage.removeItem(ACTIVE_PROCESS_KEY);
+        clearActiveProcess();
         return;
       }
       // The POST may have actually reached the server and started a stream
       // even though this fetch() failed on our end (e.g. the phone's network
       // died mid-request) — reconnect to it instead of resending, which would
-      // otherwise race a second `claude --resume` process against the one
+      // otherwise race a second backend resume process against the one
       // that's already running and writing to the same session file.
       if (sessionId) {
         try {
           const activeRes = await apiFetch('/api/streams/active-by-session');
           const active = activeRes.ok ? await activeRes.json() : [];
-          const match = active.find(a => a.sessionId === sessionId);
+          const match = active.find(a => a.backend === backend && a.sessionId === sessionId);
           if (match) {
             abortRef.current = null;
             await reconnectToStream(match.processId);
@@ -504,19 +535,18 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
       const isNetwork = err.message === 'Failed to fetch' || err.name === 'TypeError';
       setSendError({ text, reason: isNetwork ? 'Network error' : err.message });
       setIsStreaming(false);
-      assistantTextRef.current = '';
       processIdRef.current = null;
       abortRef.current = null;
-      sessionStorage.removeItem(ACTIVE_PROCESS_KEY);
+      if (!isNetwork) clearActiveProcess();
     }
-  }, [inputText, isStreaming, sessionId, projectPath, permissionMode, model, onUpdateState]);
+  }, [backend, inputText, isStreaming, sessionId, projectPath, permissionMode, model, onUpdateState]);
 
   function handleStop() {
     if (processIdRef.current) {
       apiFetch(`/api/abort/${processIdRef.current}`, { method: 'POST' }).catch(() => {});
     }
     abortRef.current?.abort();
-    sessionStorage.removeItem(ACTIVE_PROCESS_KEY);
+    clearActiveProcess(processIdRef.current);
     setIsStreaming(false);
     setActiveToolStatus(null);
     try { navigator.vibrate?.(40); } catch {}
@@ -548,7 +578,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
     if (isStreaming && processIdRef.current) {
       apiFetch(`/api/abort/${processIdRef.current}`, { method: 'POST' }).catch(() => {});
       abortRef.current?.abort();
-      sessionStorage.removeItem(ACTIVE_PROCESS_KEY);
+      clearActiveProcess(processIdRef.current);
     }
     onBack();
   }
@@ -559,7 +589,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
       if (msg.role === 'user') lines.push(`## You\n\n${msg.content}\n`);
       else if (msg.role === 'assistant') {
         const text = (msg.parts || []).filter(p => p.type === 'text').map(p => p.text).join('\n');
-        if (text) lines.push(`## Claude\n\n${text}\n`);
+        if (text) lines.push(`## ${backendDescriptor.label}\n\n${text}\n`);
       }
     }
     const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
@@ -571,8 +601,8 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
     URL.revokeObjectURL(url);
   }
 
-  const modeBadgeLabel = { plan: 'Plan', acceptEdits: 'Edits', auto: 'Auto', default: 'Default', bypassPermissions: 'Bypass' };
-  const modelBadgeLabel = { sonnet: 'Sonnet', opus: 'Opus', haiku: 'Haiku' };
+  const permissionLabel = backendDescriptor.permissionModes.find(item => item.value === permissionMode)?.label || permissionMode;
+  const modelLabel = backendDescriptor.models.find(item => item.value === model)?.label || model;
 
   const QUICK_PROMPTS = [
     'Review this code', 'Write tests', 'Explain this', 'Fix the bug',
@@ -632,8 +662,9 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
       )}
 
       {/* / skill+command picker bottom sheet */}
-      {showSlashPicker && (
+      {showSlashPicker && backendDescriptor.capabilities.skillsPicker && (
         <SlashPicker
+          backend={backend}
           projectPath={projectPath}
           onSelect={(invoke) => {
             setInputText(prev => {
@@ -664,13 +695,21 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
         <div className="cv-header-center">
           <span className="cv-title">{title}</span>
           <span className="cv-header-subtitle">
-            {modelBadgeLabel[model] || model}
+            {backendDescriptor.label}
             <span className="cv-header-dot">·</span>
-            {modeBadgeLabel[permissionMode] || permissionMode}
+            {modelLabel}
+            <span className="cv-header-dot">·</span>
+            {permissionLabel}
             {sessionCost > 0 && (
               <>
                 <span className="cv-header-dot">·</span>
                 ${sessionCost.toFixed(3)}
+              </>
+            )}
+            {sessionTokens > 0 && (
+              <>
+                <span className="cv-header-dot">·</span>
+                {sessionTokens.toLocaleString()} tokens
               </>
             )}
           </span>
@@ -685,6 +724,8 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
             onPermissionChange={(mode) => onUpdateState({ permissionMode: mode })}
             model={model}
             onModelChange={(m) => onUpdateState({ model: m })}
+            models={backendDescriptor.models}
+            permissionModes={backendDescriptor.permissionModes}
           />
         </div>
       </div>
@@ -692,7 +733,14 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
       <div className="cv-chat-wrap">
         <div className="cv-chat" ref={chatRef}>
           {isNewChat ? (
-            <NewChatSetup projectPath={projectPath} permissionMode={permissionMode} onUpdateState={onUpdateState} />
+            <NewChatSetup
+              backend={backend}
+              backends={backendDescriptors}
+              model={model}
+              projectPath={projectPath}
+              permissionMode={permissionMode}
+              onUpdateState={onUpdateState}
+            />
           ) : loadingMessages ? (
             <MessageSkeleton />
           ) : loadError ? (
@@ -725,6 +773,8 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
                   onEditCancel={handleEditCancel}
                   onEditResend={handleEditResend}
                   onAnswerQuestion={handleAnswerQuestion}
+                  allowInteractiveQuestions={backendDescriptor.capabilities.interactiveQuestions}
+                  theme={theme}
                 />
               ))}
               {resumablePid && !isStreaming && (
@@ -749,6 +799,13 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
                     <RotateCcw size={12} />
                     Retry
                   </button>
+                </div>
+              )}
+              {runtimeWarning && (
+                <div className="cv-runtime-warning" role="status">
+                  <span>Policy notice</span>
+                  <p>{runtimeWarning}</p>
+                  <button onClick={() => setRuntimeWarning(null)} aria-label="Dismiss policy notice"><X size={13} /></button>
                 </div>
               )}
             </>
@@ -790,15 +847,17 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
               <span className="cv-action-label">Add files to chat</span>
               <ChevronRight size={16} className="cv-action-chevron" />
             </button>
-            <button className="cv-action-item" onClick={() => {
-              setShowActions(false);
-              setInputText(prev => (prev ? prev : '') + '/');
-              setShowSlashPicker(true);
-            }}>
-              <span className="cv-action-icon-circle"><Slash size={16} /></span>
-              <span className="cv-action-label">Tool/command access</span>
-              <ChevronRight size={16} className="cv-action-chevron" />
-            </button>
+            {backendDescriptor.capabilities.skillsPicker && (
+              <button className="cv-action-item" onClick={() => {
+                setShowActions(false);
+                setInputText(prev => (prev ? prev : '') + '/');
+                setShowSlashPicker(true);
+              }}>
+                <span className="cv-action-icon-circle"><Slash size={16} /></span>
+                <span className="cv-action-label">Tool/command access</span>
+                <ChevronRight size={16} className="cv-action-chevron" />
+              </button>
+            )}
             <button className="cv-action-item" onClick={() => { setShowActions(false); setShowHistory(true); }}>
               <span className="cv-action-icon-circle"><History size={16} /></span>
               <span className="cv-action-label">Recent prompts</span>
@@ -863,7 +922,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
         <textarea
           ref={inputRef}
           className="cv-input"
-          placeholder="Message Claude…"
+          placeholder={`Message ${backendDescriptor.label}…`}
           rows={1}
           value={inputText}
           onChange={e => {
@@ -873,7 +932,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
             // Open @ picker when @ is typed
             if (val.endsWith('@')) setShowAtPicker(true);
             // Open / picker only when / is the very first character (slash-command position)
-            if (val === '/') setShowSlashPicker(true);
+            if (val === '/' && backendDescriptor.capabilities.skillsPicker) setShowSlashPicker(true);
             else if (!val.startsWith('/')) setShowSlashPicker(false);
             e.target.style.height = 'auto';
             e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
@@ -1280,7 +1339,7 @@ function AtFilePicker({ projectPath, onSelect, onClose }) {
 // ============================================================================
 // / skill+command picker bottom sheet
 // ============================================================================
-function SlashPicker({ projectPath, onSelect, onClose }) {
+function SlashPicker({ backend, projectPath, onSelect, onClose }) {
   const [tab, setTab] = useState('skills');
   const [items, setItems] = useState({ skills: [], commands: [] });
   const [loading, setLoading] = useState(true);
@@ -1288,11 +1347,11 @@ function SlashPicker({ projectPath, onSelect, onClose }) {
   const [filter, setFilter] = useState('');
 
   useEffect(() => {
-    apiFetch(`/api/slash-items?projectPath=${encodeURIComponent(projectPath || '')}`)
+    apiFetch(`/api/slash-items?backend=${encodeURIComponent(backend)}&projectPath=${encodeURIComponent(projectPath || '')}`)
       .then(r => { if (!r.ok) throw new Error(); return r.json(); })
       .then(data => { setItems(data); setLoading(false); })
       .catch(() => { setFetchError(true); setLoading(false); });
-  }, [projectPath]);
+  }, [backend, projectPath]);
 
   const list = (items[tab] || []).filter(it =>
     !filter || it.invoke.toLowerCase().includes(filter.toLowerCase()) || it.description.toLowerCase().includes(filter.toLowerCase())
@@ -1335,14 +1394,55 @@ function SlashPicker({ projectPath, onSelect, onClose }) {
 // ============================================================================
 // Message bubble
 // ============================================================================
-const MarkdownText = memo(function MarkdownText({ text }) {
+const MarkdownText = memo(function MarkdownText({ text, theme }) {
+  const containerRef = useRef(null);
   const html = useMemo(() => marked.parse(text || ''), [text]);
-  return <div dangerouslySetInnerHTML={{ __html: html }} />;
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return undefined;
+    const blocks = [...container.querySelectorAll('[data-mermaid-block]')];
+    if (blocks.length === 0) return undefined;
+
+    let cancelled = false;
+    const timeout = setTimeout(() => {
+      for (const block of blocks) {
+        const stage = block.querySelector('.cv-mermaid-stage');
+        const sourceDetails = block.querySelector('.cv-mermaid-source');
+        const definition = sourceDetails?.querySelector('code')?.textContent || '';
+        if (!stage || !definition.trim()) continue;
+
+        renderMermaidDiagram(definition, theme)
+          .then(({ svg, bindFunctions }) => {
+            if (cancelled || !stage.isConnected) return;
+            stage.innerHTML = svg;
+            stage.setAttribute('aria-busy', 'false');
+            block.setAttribute('data-mermaid-state', 'rendered');
+            bindFunctions?.(stage);
+          })
+          .catch(() => {
+            if (cancelled || !stage.isConnected) return;
+            stage.textContent = 'Could not render this Mermaid diagram.';
+            stage.setAttribute('aria-busy', 'false');
+            block.setAttribute('data-mermaid-state', 'error');
+            if (sourceDetails) sourceDetails.open = true;
+          });
+      }
+    }, 150);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [html, theme]);
+
+  return <div ref={containerRef} dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
-const MessageBubble = memo(function MessageBubble({ msg, index, isLastMessage, isStreaming, editingMsg, onEditStart, onEditCancel, onEditResend, onAnswerQuestion }) {
+const MessageBubble = memo(function MessageBubble({ msg, index, isLastMessage, isStreaming, editingMsg, onEditStart, onEditCancel, onEditResend, onAnswerQuestion, allowInteractiveQuestions, theme }) {
   const [copied, setCopied] = useState(false);
   const [showCost, setShowCost] = useState(false);
+  const [showDiff, setShowDiff] = useState(false);
   const longPressTimer = useRef(null);
   const isEditingThis = editingMsg?.index === index;
 
@@ -1394,7 +1494,7 @@ const MessageBubble = memo(function MessageBubble({ msg, index, isLastMessage, i
         onTouchStart={!isStreaming ? onPressStart : undefined}
         onTouchEnd={onPressEnd}
       >
-        <div className="cv-msg-body cv-user-body"><MarkdownText text={msg.content} /></div>
+        <div className="cv-msg-body cv-user-body"><MarkdownText text={msg.content} theme={theme} /></div>
       </div>
     );
   }
@@ -1402,11 +1502,13 @@ const MessageBubble = memo(function MessageBubble({ msg, index, isLastMessage, i
   if (msg.role === 'assistant') {
     const parts = msg.parts || [];
     const hasText = parts.some(p => p.type === 'text');
-    const editParts = parts.filter(p => p.type === 'tool_use' && (p.name === 'Edit' || p.name === 'Write'));
+    const tokenTotal = msg.tokens ? (msg.tokens.inputTokens || 0) + (msg.tokens.outputTokens || 0) : 0;
+    const editParts = parts.filter(part => part.type === 'tool_use' && (
+      (part.name === 'Edit' && (part.input?.old_string !== undefined || part.input?.new_string !== undefined))
+      || (part.name === 'Write' && part.input?.content !== undefined)
+    ));
     const changedFiles = new Set(editParts.map(p => p.input?.file_path).filter(Boolean));
     const showDiffChip = !msg._streaming && changedFiles.size > 0;
-    const [showDiff, setShowDiff] = useState(false);
-
     return (
       <div className="cv-msg cv-assistant">
         {showDiff && <DiffSheet parts={parts} onClose={() => setShowDiff(false)} />}
@@ -1415,7 +1517,7 @@ const MessageBubble = memo(function MessageBubble({ msg, index, isLastMessage, i
           <div className="cv-msg-body cv-assistant-body">
             {parts.map((part, i) => {
               if (part.type !== 'text') return <ToolChip key={i} part={part} />;
-              const question = parseInteractiveQuestion(part.text);
+              const question = allowInteractiveQuestions ? parseInteractiveQuestion(part.text) : null;
               if (question) {
                 const Renderer = INTERACTIVE_QUESTION_RENDERERS[question.tool] || GenericQuestionCard;
                 return (
@@ -1427,7 +1529,7 @@ const MessageBubble = memo(function MessageBubble({ msg, index, isLastMessage, i
                   />
                 );
               }
-              return <MarkdownText key={i} text={part.text} />;
+              return <MarkdownText key={i} text={part.text} theme={theme} />;
             })}
           </div>
           <div className="cv-assistant-footer">
@@ -1443,13 +1545,16 @@ const MessageBubble = memo(function MessageBubble({ msg, index, isLastMessage, i
                 {changedFiles.size} file{changedFiles.size !== 1 ? 's' : ''} changed
               </button>
             )}
-            {msg.cost && (
+            {(msg.cost || tokenTotal > 0) && (
               <button className="cv-cost-toggle" onClick={() => setShowCost(v => !v)}>
                 <MoreHorizontal size={14} />
               </button>
             )}
-            {msg.cost && showCost && (
-              <span className="cv-cost">${msg.cost.toFixed(4)} · {Math.round(msg.duration / 1000)}s</span>
+            {(msg.cost || tokenTotal > 0) && showCost && (
+              <span className="cv-cost">
+                {msg.cost ? `$${msg.cost.toFixed(4)}` : `${tokenTotal.toLocaleString()} tokens`}
+                {msg.duration ? ` · ${Math.round(msg.duration / 1000)}s` : ''}
+              </span>
             )}
           </div>
         </div>

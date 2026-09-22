@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"codex-session"}
+{"type":"item.completed","item":{"id":"item-0","type":"error","message":"Configured value is disallowed by requirements; falling back to required value OnRequest"}}
+{"type":"item.completed","item":{"id":"item-1","type":"agent_message","text":"Working on it."}}
+{"type":"item.started","item":{"id":"item-2","type":"command_execution","command":"pwd","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item-2","type":"command_execution","command":"pwd","aggregated_output":"/tmp/project\n","exit_code":0,"status":"completed"}}
+{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":40,"cache_write_input_tokens":0,"output_tokens":25,"reasoning_output_tokens":5}}

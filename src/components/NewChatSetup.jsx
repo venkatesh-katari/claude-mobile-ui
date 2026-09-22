@@ -1,14 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { Check } from 'lucide-react';
 import { apiFetch } from '../utils/api';
 import './NewChatSetup.css';
-
-const PERM_HINTS = {
-  plan: "Claude will analyze and plan but won't make any changes. Safest for mobile use.",
-  acceptEdits: 'Claude can edit files automatically, but bash/shell commands will be denied.',
-  auto: '⚠️ Claude will approve ALL actions automatically, including running commands. Use with caution.',
-  default: 'Tools requiring permission will be denied in non-interactive mode.',
-};
 
 // Native <select> on desktop (mouse/keyboard dropdown); on touch devices the
 // native picker renders as an awkward anchored list, so we swap in the app's
@@ -77,33 +70,71 @@ function NotificationToggle() {
   }
   return (
     <button className="ncs-notif-btn" onClick={request}>
-      🔔 Enable notifications when Claude finishes
+      🔔 Enable notifications when the agent finishes
     </button>
   );
 }
 
-const PERM_OPTIONS = [
-  { value: 'plan', label: 'Plan — read-only analysis, no changes' },
-  { value: 'acceptEdits', label: 'Accept Edits — auto-approve file edits, deny bash' },
-  { value: 'auto', label: 'Auto — approve everything automatically' },
-  { value: 'default', label: 'Default — deny tools that need permission' },
-];
-
-export default function NewChatSetup({ projectPath, permissionMode, onUpdateState }) {
+export default function NewChatSetup({ backend, backends, model, projectPath, permissionMode, onUpdateState }) {
   const [dirs, setDirs] = useState([]);
 
   useEffect(() => {
     apiFetch('/api/directories')
-      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(response => response.ok ? response.json() : Promise.reject())
       .then(setDirs)
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    if (!backends.length || backends.some(item => item.id === backend && item.available)) return;
+    const fallback = backends.find(item => item.available);
+    if (fallback) {
+      onUpdateState({
+        backend: fallback.id,
+        model: fallback.defaultModel,
+        permissionMode: fallback.defaultPermissionMode,
+      });
+    }
+  }, [backend, backends, onUpdateState]);
+
+  const selectedBackend = useMemo(
+    () => backends.find(item => item.id === backend),
+    [backend, backends]
+  );
+
   const dirOptions = [{ value: '', label: '~ (Home directory)' }, ...dirs.map(d => ({ value: d, label: d }))];
+  const backendOptions = backends
+    .filter(item => item.available)
+    .map(item => ({ value: item.id, label: item.label }));
+  const modelOptions = (selectedBackend?.models || []).map(item => ({
+    value: item.value,
+    label: item.description ? `${item.label} — ${item.description}` : item.label,
+  }));
+  const permissionOptions = (selectedBackend?.permissionModes || []).map(item => ({
+    value: item.value,
+    label: item.description ? `${item.label} — ${item.description}` : item.label,
+  }));
+  const permissionHint = selectedBackend?.permissionModes.find(item => item.value === permissionMode)?.description;
 
   return (
     <div className="ncs-section">
       <h2 className="ncs-title">New Chat Setup</h2>
+
+      <label className="ncs-label">Backend</label>
+      <ResponsiveSelect
+        label="Backend"
+        value={backend}
+        options={backendOptions}
+        onChange={value => {
+          const next = backends.find(item => item.id === value);
+          if (!next) return;
+          onUpdateState({
+            backend: next.id,
+            model: next.defaultModel,
+            permissionMode: next.defaultPermissionMode,
+          });
+        }}
+      />
 
       <label className="ncs-label">Working Directory</label>
       <ResponsiveSelect
@@ -113,14 +144,26 @@ export default function NewChatSetup({ projectPath, permissionMode, onUpdateStat
         onChange={v => onUpdateState({ projectPath: v || null })}
       />
 
+      {modelOptions.length > 0 && (
+        <>
+          <label className="ncs-label">Model</label>
+          <ResponsiveSelect
+            label="Model"
+            value={model}
+            options={modelOptions}
+            onChange={value => onUpdateState({ model: value })}
+          />
+        </>
+      )}
+
       <label className="ncs-label">Permission Mode</label>
       <ResponsiveSelect
         label="Permission Mode"
         value={permissionMode}
-        options={PERM_OPTIONS}
+        options={permissionOptions}
         onChange={v => onUpdateState({ permissionMode: v })}
       />
-      <p className="ncs-hint">{PERM_HINTS[permissionMode]}</p>
+      {permissionHint && <p className="ncs-hint">{permissionHint}</p>}
 
       <NotificationToggle />
 

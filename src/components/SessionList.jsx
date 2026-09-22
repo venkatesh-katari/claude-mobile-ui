@@ -15,7 +15,11 @@ function formatDate(dateStr) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-function RenameInput({ value, sessionId, onDone }) {
+function sessionKey(backend, sessionId) {
+  return `${backend}:${sessionId}`;
+}
+
+function RenameInput({ value, backend, sessionId, onDone }) {
   const [text, setText] = useState(value);
   const [saving, setSaving] = useState(false);
 
@@ -27,7 +31,7 @@ function RenameInput({ value, sessionId, onDone }) {
       await apiFetch(`/api/sessions/${sessionId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ summary: trimmed }),
+        body: JSON.stringify({ backend, summary: trimmed }),
       });
       onDone(trimmed);
     } catch {
@@ -54,8 +58,9 @@ function RenameInput({ value, sessionId, onDone }) {
   );
 }
 
-function SessionCard({ session, projectId, onOpen, onRename, renamingId, onRenameComplete, isActive }) {
-  const isRenaming = renamingId === session.sessionId;
+function SessionCard({ session, projectId, projectKey, onOpen, onRename, renamingId, onRenameComplete, isActive }) {
+  const key = sessionKey(session.backend, session.sessionId);
+  const isRenaming = renamingId === key;
   const displayTitle = session.summary && session.summary !== '(no title)'
     ? session.summary
     : null;
@@ -63,14 +68,15 @@ function SessionCard({ session, projectId, onOpen, onRename, renamingId, onRenam
   return (
     <div
       className={`sl-session-card ${isActive ? 'sl-session-active' : ''}`}
-      onClick={() => !isRenaming && onOpen(session.sessionId, session.projectPath, projectId, session.summary)}
+      onClick={() => !isRenaming && onOpen(session.backend, session.sessionId, session.projectPath, projectId, session.summary)}
     >
       <div className="sl-session-title-row">
         {isRenaming ? (
           <RenameInput
             value={session.summary}
+            backend={session.backend}
             sessionId={session.sessionId}
-            onDone={(title) => onRenameComplete(projectId, session.sessionId, title)}
+            onDone={(title) => onRenameComplete(projectKey, session.backend, session.sessionId, title)}
           />
         ) : (
           <>
@@ -83,10 +89,13 @@ function SessionCard({ session, projectId, onOpen, onRename, renamingId, onRenam
                 Live
               </span>
             )}
+            <span className={`sl-backend-badge sl-backend-${session.backend}`}>
+              {session.backend === 'codex' ? 'Codex' : 'Claude'}
+            </span>
             <button
               className="sl-rename-btn"
               title="Rename"
-              onClick={e => { e.stopPropagation(); onRename(session.sessionId); }}
+              onClick={e => { e.stopPropagation(); onRename(key); }}
             >
               <Pencil size={12} />
             </button>
@@ -101,7 +110,7 @@ function SessionCard({ session, projectId, onOpen, onRename, renamingId, onRenam
   );
 }
 
-export default function SessionList({ onOpenSession, onNewChat, theme, onToggleTheme, autoOpenSessionId, onDeepLinkResolved }) {
+export default function SessionList({ onOpenSession, onNewChat, theme, onToggleTheme, autoOpenSessionId, autoOpenBackend, onDeepLinkResolved }) {
   const [projects, setProjects] = useState([]);
   const [expanded, setExpanded] = useState(new Set());
   const [loading, setLoading] = useState(true);
@@ -119,7 +128,9 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
     function fetchActive() {
       apiFetch('/api/sessions/active')
         .then(r => r.ok ? r.json() : Promise.reject())
-        .then(ids => setActiveSessionIds(new Set(ids)))
+        .then(sessions => setActiveSessionIds(new Set(
+          sessions.map(session => sessionKey(session.backend, session.sessionId))
+        )))
         .catch(() => {});
     }
     fetchActive();
@@ -128,18 +139,45 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
   }, []);
 
   async function loadProjects() {
+    setLoading(true);
     setLoadError(false);
     try {
       const res = await apiFetch('/api/projects');
       if (!res.ok) throw new Error(`Server returned ${res.status}`);
       const projs = await res.json();
-      const loaded = [];
-      for (const proj of projs) {
-        const sessRes = await apiFetch(`/api/projects/${encodeURIComponent(proj.id)}/sessions`);
-        if (!sessRes.ok) continue; // skip broken project, keep loading others
-        const sessions = await sessRes.json();
-        if (sessions.length === 0) continue;
-        loaded.push({ ...proj, sessions });
+      const sources = await Promise.all(projs.map(async proj => {
+        try {
+          const sessRes = await apiFetch(`/api/projects/${encodeURIComponent(proj.id)}/sessions?backend=${encodeURIComponent(proj.backend)}`);
+          if (!sessRes.ok) return null;
+          const sessions = await sessRes.json();
+          return sessions.length ? {
+            ...proj,
+            sessions: sessions.map(session => ({ ...session, projectId: proj.id })),
+          } : null;
+        } catch {
+          return null; // One corrupt project must not hide healthy projects.
+        }
+      }));
+
+      // A filesystem project can contain sessions from both CLIs. Group by
+      // exact cwd so users see one project with backend-tagged session cards.
+      const grouped = new Map();
+      for (const source of sources.filter(Boolean)) {
+        const key = source.originalPath || `${source.backend}:${source.id}`;
+        const group = grouped.get(key) || {
+          id: key,
+          key,
+          originalPath: source.originalPath,
+          sessionCount: 0,
+          sessions: [],
+        };
+        group.sessionCount += source.sessionCount;
+        group.sessions.push(...source.sessions);
+        grouped.set(key, group);
+      }
+      const loaded = [...grouped.values()];
+      for (const project of loaded) {
+        project.sessions.sort((left, right) => new Date(right.modified || right.created) - new Date(left.modified || left.created));
       }
       setProjects(loaded);
 
@@ -149,7 +187,7 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
           const t = new Date(p.sessions[0]?.modified || 0);
           return t > new Date(best.sessions[0]?.modified || 0) ? p : best;
         });
-        setExpanded(new Set([mostRecent.id]));
+        setExpanded(new Set([mostRecent.key]));
       }
     } catch (err) {
       console.error('Failed to load projects:', err);
@@ -167,23 +205,22 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
     });
   }
 
-  // activeSessionIds only ever reflects streams this mobile server itself
-  // spawned (never a real second device — see CLAUDE_CODE_ASSUMPTIONS.md #7),
+  // activeSessionIds only reflects streams this mobile server itself spawned,
   // so an entry here just means "reconnect to your own still-running stream,"
   // not a genuine conflict — ChatView's reconnect effect handles that via
   // /api/streams/active-by-session. A *real* desktop conflict (session last
   // touched by desktop CLI/VSCode/Cursor, and that origin still looks live)
-  // is checked server-side; see docs/session-conflict-detection.md.
-  const handleOpenSession = useCallback(async (sessionId, projectPath, projectId, summary) => {
+  // is checked server-side; see SESSION_CONFLICT_DETECTION.md.
+  const handleOpenSession = useCallback(async (backend, sessionId, projectPath, projectId, summary) => {
     try {
-      const res = await apiFetch(`/api/sessions/${sessionId}/conflict-check`);
+      const res = await apiFetch(`/api/sessions/${sessionId}/conflict-check?backend=${encodeURIComponent(backend)}`);
       const { conflict } = res.ok ? await res.json() : { conflict: false };
       if (conflict) {
-        setConflictSession({ sessionId, projectPath, projectId, summary });
+        setConflictSession({ backend, sessionId, projectPath, projectId, summary });
         return;
       }
     } catch { /* check failed — fall through and open normally */ }
-    onOpenSession(sessionId, projectPath, projectId, summary);
+    onOpenSession(backend, sessionId, projectPath, projectId, summary);
   }, [onOpenSession]);
 
   // Deep link / refresh landed on a specific session — once project data has
@@ -194,17 +231,17 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
     if (!autoOpenSessionId || autoOpenedRef.current || loading) return;
     autoOpenedRef.current = true;
     const match = projects
-      .flatMap(p => p.sessions.map(s => ({ ...s, projectId: p.id })))
-      .find(s => s.sessionId === autoOpenSessionId);
-    if (match) handleOpenSession(match.sessionId, match.projectPath, match.projectId, match.summary);
+      .flatMap(p => p.sessions)
+      .find(s => s.sessionId === autoOpenSessionId && s.backend === autoOpenBackend);
+    if (match) handleOpenSession(match.backend, match.sessionId, match.projectPath, match.projectId, match.summary);
     onDeepLinkResolved?.(!!match);
-  }, [autoOpenSessionId, loading, projects, handleOpenSession, onDeepLinkResolved]);
+  }, [autoOpenSessionId, autoOpenBackend, loading, projects, handleOpenSession, onDeepLinkResolved]);
 
-  const handleRenameComplete = useCallback((projectId, sessionId, newTitle) => {
+  const handleRenameComplete = useCallback((projectKey, backend, sessionId, newTitle) => {
     setProjects(prev => prev.map(p =>
-      p.id !== projectId ? p : {
+      p.key !== projectKey ? p : {
         ...p,
-        sessions: p.sessions.map(s => s.sessionId === sessionId ? { ...s, summary: newTitle } : s),
+        sessions: p.sessions.map(s => s.backend === backend && s.sessionId === sessionId ? { ...s, summary: newTitle } : s),
       }
     ));
     setRenamingId(null);
@@ -215,7 +252,7 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
 
   // Flat recent sessions — latest 5 across all projects
   const recentSessions = useMemo(() => {
-    const all = projects.flatMap(p => p.sessions.map(s => ({ ...s, projectId: p.id })));
+    const all = projects.flatMap(p => p.sessions.map(s => ({ ...s, projectKey: p.key })));
     return all.sort((a, b) => new Date(b.modified || b.created) - new Date(a.modified || a.created)).slice(0, 5);
   }, [projects]);
 
@@ -228,7 +265,7 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
   return (
     <div className="sl-container">
 
-      {/* Conflict bottom sheet — real desktop-live signal, see docs/session-conflict-detection.md */}
+      {/* Conflict bottom sheet — real desktop-live signal, see SESSION_CONFLICT_DETECTION.md */}
       {conflictSession && (
         <div className="sl-conflict-overlay" onClick={() => setConflictSession(null)}>
           <div className="sl-conflict-sheet" onClick={e => e.stopPropagation()}>
@@ -241,7 +278,7 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
             <button
               className="sl-conflict-btn sl-conflict-anyway"
               onClick={() => {
-                onOpenSession(conflictSession.sessionId, conflictSession.projectPath, conflictSession.projectId, conflictSession.summary);
+                onOpenSession(conflictSession.backend, conflictSession.sessionId, conflictSession.projectPath, conflictSession.projectId, conflictSession.summary);
                 setConflictSession(null);
               }}
             >
@@ -258,7 +295,7 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
       )}
 
       <div className="sl-header">
-        <h1>Claude</h1>
+        <h1>Agents</h1>
         <div className="sl-header-actions">
           <button className="sl-theme-btn" onClick={onToggleTheme} title="Toggle theme">
             {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
@@ -272,7 +309,7 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
 
       {status.busy && (
         <div className="sl-busy-banner">
-          ⏳ Claude is busy — {status.activeSessions}/{status.maxSessions} sessions active
+          ⏳ Agent capacity reached — {status.activeSessions}/{status.maxSessions} sessions active
         </div>
       )}
 
@@ -324,14 +361,15 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
             <div className="sl-section-label">Recent</div>
             {recentSessions.map(s => (
               <SessionCard
-                key={s.sessionId}
+                key={sessionKey(s.backend, s.sessionId)}
                 session={s}
                 projectId={s.projectId}
+                projectKey={s.projectKey}
                 onOpen={handleOpenSession}
                 onRename={setRenamingId}
                 renamingId={renamingId}
                 onRenameComplete={handleRenameComplete}
-                isActive={activeSessionIds.has(s.sessionId)}
+                isActive={activeSessionIds.has(sessionKey(s.backend, s.sessionId))}
               />
             ))}
           </div>
@@ -345,11 +383,11 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
               const pathParts = (proj.originalPath || proj.id).split('/').filter(Boolean);
               const shortPath = pathParts.slice(-2).join('/');
               const projectName = pathParts[pathParts.length - 1] || shortPath;
-              const isExpanded = displayExpanded.has(proj.id);
+              const isExpanded = displayExpanded.has(proj.key);
 
               return (
-                <div key={proj.id} className={`sl-group ${isExpanded ? 'expanded' : ''}`}>
-                  <div className="sl-group-header" onClick={() => toggleProject(proj.id)}>
+                <div key={proj.key} className={`sl-group ${isExpanded ? 'expanded' : ''}`}>
+                  <div className="sl-group-header" onClick={() => toggleProject(proj.key)}>
                     <div className="sl-group-name-wrap">
                       <span className="sl-group-name">{projectName}</span>
                       <span className="sl-group-path">{shortPath}</span>
@@ -364,14 +402,15 @@ export default function SessionList({ onOpenSession, onNewChat, theme, onToggleT
                     <div className="sl-group-sessions">
                       {proj.sessions.map(s => (
                         <SessionCard
-                          key={s.sessionId}
+                          key={sessionKey(s.backend, s.sessionId)}
                           session={s}
-                          projectId={proj.id}
+                          projectId={s.projectId}
+                          projectKey={proj.key}
                           onOpen={handleOpenSession}
                           onRename={setRenamingId}
                           renamingId={renamingId}
                           onRenameComplete={handleRenameComplete}
-                          isActive={activeSessionIds.has(s.sessionId)}
+                          isActive={activeSessionIds.has(sessionKey(s.backend, s.sessionId))}
                         />
                       ))}
                     </div>

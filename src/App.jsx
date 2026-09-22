@@ -3,7 +3,20 @@ import SessionList from './components/SessionList';
 import ChatView from './components/ChatView';
 import LockScreen from './components/LockScreen';
 import DiffViewerPage from './components/DiffViewerPage';
-import { getPin, clearPin, apiFetch } from './utils/api';
+import { clearPin, apiFetch } from './utils/api';
+
+const BACKEND_DEFAULTS = {
+  claude: { model: 'claude-sonnet-5', permissionMode: 'plan' },
+  codex: { model: 'default', permissionMode: 'read-only' },
+};
+
+function getInitialBackend() {
+  try {
+    const saved = localStorage.getItem('agent_backend');
+    if (saved === 'claude' || saved === 'codex') return saved;
+  } catch {}
+  return 'claude';
+}
 
 function getInitialTheme() {
   try {
@@ -55,13 +68,16 @@ export default function App() {
   }, []);
 
   const [view, setView] = useState('list');
-  const [chatState, setChatState] = useState({
-    sessionId: null,
-    projectPath: null,
-    projectId: null,
-    title: 'New Chat',
-    permissionMode: 'plan',
-    model: 'claude-sonnet-5',
+  const [chatState, setChatState] = useState(() => {
+    const backend = getInitialBackend();
+    return {
+      backend,
+      sessionId: null,
+      projectPath: null,
+      projectId: null,
+      title: 'New Chat',
+      ...BACKEND_DEFAULTS[backend],
+    };
   });
 
   // A session id found in the URL on load (deep link / refresh) — SessionList
@@ -70,11 +86,21 @@ export default function App() {
   const [deepLinkSessionId, setDeepLinkSessionId] = useState(
     () => new URLSearchParams(window.location.search).get('session')
   );
+  const [deepLinkBackend] = useState(
+    () => new URLSearchParams(window.location.search).get('backend') || 'claude'
+  );
 
-  const openSession = useCallback((sessionId, projectPath, projectId, title) => {
-    setChatState(s => ({ ...s, sessionId, projectPath, projectId, title }));
+  const openSession = useCallback((backend, sessionId, projectPath, projectId, title) => {
+    setChatState({
+      backend,
+      sessionId,
+      projectPath,
+      projectId,
+      title,
+      ...(BACKEND_DEFAULTS[backend] || BACKEND_DEFAULTS.claude),
+    });
     setView('chat');
-    window.history.replaceState(null, '', `/?session=${encodeURIComponent(sessionId)}`);
+    window.history.replaceState(null, '', `/?backend=${encodeURIComponent(backend)}&session=${encodeURIComponent(sessionId)}`);
   }, []);
 
   const startNewChat = useCallback(() => {
@@ -83,6 +109,7 @@ export default function App() {
       projectPath: null,
       projectId: null,
       title: 'New Chat',
+      backend: s.backend,
       permissionMode: s.permissionMode,
       model: s.model,
     }));
@@ -97,10 +124,14 @@ export default function App() {
 
   const updateChatState = useCallback((updates) => {
     setChatState(s => ({ ...s, ...updates }));
-    if (updates.sessionId) {
-      window.history.replaceState(null, '', `/?session=${encodeURIComponent(updates.sessionId)}`);
+    if (updates.backend) {
+      try { localStorage.setItem('agent_backend', updates.backend); } catch {}
     }
-  }, []);
+    if (updates.sessionId) {
+      const backend = updates.backend || chatState.backend;
+      window.history.replaceState(null, '', `/?backend=${encodeURIComponent(backend)}&session=${encodeURIComponent(updates.sessionId)}`);
+    }
+  }, [chatState.backend]);
 
   const handleDeepLinkResolved = useCallback((found) => {
     setDeepLinkSessionId(null);
@@ -123,6 +154,7 @@ export default function App() {
         theme={theme}
         onToggleTheme={toggleTheme}
         autoOpenSessionId={deepLinkSessionId}
+        autoOpenBackend={deepLinkBackend}
         onDeepLinkResolved={handleDeepLinkResolved}
       />
     );
