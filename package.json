@@ -1,11 +1,13 @@
 {
   "name": "claude-mobile-ui",
   "version": "2.0.0",
-  "description": "Mobile-friendly web UI for Claude Code CLI",
+  "description": "Mobile-friendly web UI for Claude Code and Codex CLI",
   "type": "module",
   "scripts": {
     "dev": "concurrently \"node --watch server.js\" \"vite\"",
     "build": "vite build",
+    "test": "node --test",
+    "check": "node --check server.js && tsc -p tsconfig.contracts.json",
     "start": "vite build && node server.js",
     "start:awake": "vite build && caffeinate -ims node server.js",
     "server": "node server.js",
@@ -17,13 +19,19 @@
     "highlight.js": "^11.10.0",
     "lucide-react": "^1.14.0",
     "marked": "^15.0.0",
+    "mermaid": "^11.17.2",
+    "multer": "^2.4.0",
+    "picomatch": "^4.0.4",
     "react": "^19.0.0",
     "react-diff-view": "^3.3.3",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@types/node": "^26.4.1",
+    "@types/picomatch": "^4.0.3",
     "@vitejs/plugin-react": "^4.3.0",
     "concurrently": "^9.0.0",
+    "typescript": "^7.0.2",
     "vite": "^6.0.0"
   }
 }

@@ -1,6 +1,6 @@
 # Claude Mobile UI
 
-A mobile-friendly web UI that lets you control Claude Code CLI from your phone on the same WiFi network. Browse past sessions, start new chats, explore files, and get notified when Claude finishes — all from your phone.
+A mobile-friendly web UI that lets you control Claude Code or Codex CLI from your phone on the same WiFi network. Browse past sessions, start new chats, explore files, and get notified when the agent finishes — all from your phone.
 
 ## Quick Start
 
@@ -13,6 +13,25 @@ npm run build
 
 Open the Network URL printed in the terminal on your phone.
 
+## Agent Backends
+
+Choose **Claude Code** or **Codex CLI** when starting a chat. The selection is
+remembered and stored with the session so resumes always use the correct CLI.
+Claude and Codex sessions appear together with backend badges.
+
+| Capability | Claude Code | Codex CLI |
+|---|---|---|
+| New chat, stop, reconnect, resume | ✅ | ✅ |
+| Response delivery | Token streaming | Completed-message chunks |
+| Usage display | Dollar cost | Token counts |
+| Tool activity | ✅ | ✅ shell/file events |
+| Skills and commands picker | ✅ | Not yet supported |
+| Interactive question cards | ✅ | Not yet supported |
+| Desktop conflict detection | ✅ | Not yet supported |
+
+Codex availability is detected at startup. Set `CODEX_ENABLED=0` to disable
+the backend without affecting Claude sessions.
+
 ---
 
 ## Features
@@ -21,6 +40,7 @@ Open the Network URL printed in the terminal on your phone.
 |---|---|---|
 | Browse & search past sessions | ✅ | ✅ |
 | Chat with Claude (streaming) | ✅ | ✅ |
+| Mermaid diagrams in chat | ✅ | ✅ |
 | Stop Claude mid-response | ✅ | ✅ |
 | Active tool status line | ✅ | ✅ |
 | Scroll-to-bottom FAB | ✅ | ✅ |
@@ -294,9 +314,31 @@ Anyone opening the URL will be prompted for the PIN. After 5 wrong attempts the 
 |---|---|---|
 | `PORT` | `3456` | Server port |
 | `ACCESS_PIN` | *(none)* | PIN to protect the UI |
-| `MAX_CONCURRENT` | `2` | Max simultaneous Claude processes |
+| `MAX_CONCURRENT` | `3` | Max simultaneous agent processes across both backends |
+| `CODEX_ENABLED` | `1` | Set to `0` to disable the Codex backend |
+| `SESSION_IGNORE_GLOBS` | `**/.claude-unleashed/**,/private/**,/tmp/**` | Comma-separated globs, or a JSON string array, for session working directories to hide |
 | `CERT_PATH` | *(none)* | Path to TLS certificate (.pem) |
 | `KEY_PATH` | *(none)* | Path to TLS private key (.pem) |
+
+`start.sh` sets the default above out of the box, so `.claude-unleashed`
+background workflows and `/private`/`/tmp` session paths are hidden
+automatically. Set `SESSION_IGNORE_GLOBS` yourself before invoking `start.sh`
+to replace (not append to) that default.
+
+Ignored paths are removed from both the session/project list and the New Chat
+working-directory picker. For example, to hide background workflows stored in
+`.claude-unleashed`:
+
+```bash
+SESSION_IGNORE_GLOBS='**/.claude-unleashed/**' ./start.sh --https
+```
+
+Multiple simple rules can be comma-separated. Use a JSON array if a pattern
+itself contains a comma:
+
+```bash
+SESSION_IGNORE_GLOBS='["**/.claude-unleashed/**","**/.automation-worktrees/**"]' ./start.sh --https
+```
 
 ---
 
@@ -316,14 +358,14 @@ Anyone opening the URL will be prompted for the PIN. After 5 wrong attempts the 
 
 - macOS (for `caffeinate`; the server itself runs anywhere Node 18+ is available)
 - Node.js 18+
-- Claude Code CLI (`claude`) installed and authenticated
+- At least one authenticated agent CLI: Claude Code (`claude`) or Codex (`codex`)
 
 ---
 
 ## A note on stability
 
-This app works by reading `claude`'s session files directly and spawning
-`claude -p` under the hood — none of that is a stable, documented API, so it
-can break when the CLI updates. [CLAUDE_CODE_ASSUMPTIONS.md](CLAUDE_CODE_ASSUMPTIONS.md)
-lists every such assumption (file formats, JSONL shapes, CLI flags) along
-with how to re-check each one after a `claude` upgrade.
+This app reads local CLI session files directly and spawns non-interactive
+agent processes under the hood. Those are not stable, versioned APIs, so a CLI
+upgrade can break an adapter. [CLAUDE_CODE_ASSUMPTIONS.md](CLAUDE_CODE_ASSUMPTIONS.md)
+and [CODEX_CLI_ASSUMPTIONS.md](CODEX_CLI_ASSUMPTIONS.md) record the file,
+JSONL, flag, and capability assumptions plus their re-verification steps.

@@ -6,7 +6,7 @@ API, so this document records exactly what the adapter relies on and how to
 re-check it after an upgrade.
 
 Last verified against: `codex --version` → **codex-cli 0.154.0** on
-**2026-09-11**.
+**2026-09-22**.
 
 ## 1. Invocation and prompt transport
 
@@ -141,8 +141,18 @@ titles and visible chat history.
   returns no conflict warning rather than presenting a false safety signal.
 - **Skills/commands picker:** Codex skill and plugin discovery has not yet been
   mapped to a stable file contract.
-- **Interactive question card:** no Codex equivalent of Claude's headless
-  `AskUserQuestion` fallback has been verified.
+- **Interactive question card:** Codex does have a native structured
+  equivalent, a `request_user_input` tool, but it is gated behind the
+  under-development `default_mode_request_user_input` feature flag and is
+  explicitly rejected in `exec` mode. Probed on 2026-09-22 with `--enable
+  default_mode_request_user_input`: the model attempted the tool call and the
+  client returned `request_user_input is not supported in exec mode for
+  thread <id>`, then silently fell back to plain prose. Unlike Claude's
+  headless fallback — a parseable `{questions: [...]}` JSON blob — Codex's
+  fallback has no stable shape: one run rendered a bulleted list with bold
+  option labels, another rendered a lettered `A./B./C./D.` list, for the same
+  prompt. There is nothing reliable to build a `parseInteractiveQuestion`-style
+  detector against today.
 
 ## 8. Model discovery
 
@@ -167,3 +177,7 @@ availability change.
 5. Start and resume a thread using stdin; verify the thread id is stable.
 6. Inspect a newly written rollout's metadata and response item shapes.
 7. Re-check writer-lock semantics before enabling conflict detection.
+8. Re-run `codex exec --json --enable default_mode_request_user_input` with a
+   clarifying-question prompt; check whether `request_user_input` is still
+   rejected in exec mode and whether the text fallback has gained a stable,
+   parseable shape.

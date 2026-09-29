@@ -23,6 +23,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 
 DEFAULT_CERT="$HOME/.certs/claude-mobile/cert.pem"
 DEFAULT_KEY="$HOME/.certs/claude-mobile/key.pem"
+DEFAULT_SESSION_IGNORE_GLOBS='**/.claude-unleashed/**,/private/**,/tmp/**'
 
 USE_HTTPS=false
 CERT_FILE=""
@@ -79,10 +80,16 @@ if [ "$USE_HTTPS" = true ]; then
   fi
 fi
 
-# Kill any existing instance
-pkill -f "caffeinate.*node server.js" 2>/dev/null
-pkill -f "node server.js" 2>/dev/null
-sleep 1
+# Check for an existing instance and kill it if found
+if pgrep -f "node server.js" > /dev/null 2>&1; then
+  echo "  Found existing Claude Mobile UI server running — stopping it..."
+  pkill -f "caffeinate.*node server.js" 2>/dev/null
+  pkill -f "node server.js" 2>/dev/null
+  sleep 1
+  echo "  Stopped."
+else
+  echo "  No existing server running."
+fi
 
 echo ""
 if [ "$USE_HTTPS" = true ]; then
@@ -96,5 +103,7 @@ fi
 echo "  Mac will stay awake (display can turn off)"
 echo "  Press Ctrl+C to stop"
 echo ""
+
+export SESSION_IGNORE_GLOBS="${SESSION_IGNORE_GLOBS:-$DEFAULT_SESSION_IGNORE_GLOBS}"
 
 cd "$DIR" && caffeinate -dims node server.js

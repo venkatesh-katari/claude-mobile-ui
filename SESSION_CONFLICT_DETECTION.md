@@ -28,7 +28,8 @@ scoping note). It never actually looked at desktop at all; it just mislabeled
 
 ### 1. Tag mobile-spawned sessions at the source
 
-`server.js`'s `/api/chat` spawns `claude` with:
+The Claude adapter's spawn specification (`server/backends/claude.js`) launches
+`claude` with:
 
 ```js
 env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'claude-mobile-ui' }
@@ -43,7 +44,7 @@ since nothing else sets this var).
 
 By setting it to `claude-mobile-ui` ourselves, every turn this server spawns
 is permanently, verifiably marked as mobile-origin. `getSessionOrigin()` in
-`server.js` reads a session's `.jsonl` and returns the `entrypoint` of its
+`server/backends/claude.js` reads a session's `.jsonl` and returns the `entrypoint` of its
 **most recent** `user` line — i.e. "who touched this last."
 
 **Limitation:** this is forward-looking only. Turns written before this
@@ -62,7 +63,7 @@ per currently-running IDE-attached `claude` session:
 {"pid": 1665, "workspaceFolders": ["/path/to/project"], "ideName": "Cursor", "transport": "ws", "authToken": "..."}
 ```
 
-`isDesktopLiveForCwd()` in `server.js` scans these files and returns `true`
+`isDesktopLiveForCwd()` in `server/backends/claude.js` scans these files and returns `true`
 only if it finds one whose `pid` is still alive (`process.kill(pid, 0)`
 doesn't throw) **and** whose `workspaceFolders` includes the session's
 project directory.

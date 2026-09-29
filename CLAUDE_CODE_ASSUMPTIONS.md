@@ -20,16 +20,16 @@ JSONL shapes below.
 one line-delimited JSON file per session. `<encoded-cwd>` is the project's
 absolute path with `/` replaced by `-`.
 
-- Code: `server.js` — `CLAUDE_PROJECTS_DIR`, `findSessionFile()`
+- Code: `server/backends/claude.js` — `projectsDirectory`, `findSessionFile()`
 - **Fixed (2026-08-07):** the path-encoding scheme used to naively do
   `path.replaceAll('-', '/')` to decode a directory name back to a path
-  (`server.js`, `/api/directories` and `getProjectInfo`). This was wrong for
+  (the former `server.js` directory/project helpers). This was wrong for
   any real path containing a literal dash (e.g. this repo: `claude-mobile-ui`
   decoded to `claude/mobile/ui`), which broke `/api/directories`, the
   session-list fallback `projectPath`, and — surfaced directly by this bug —
   the `/` picker not finding this repo's own project-level skill, since it
   was querying the wrong (dash-expanded) directory for `.claude/skills`.
-  Fixed via `deriveCwdFromProjectDir()`, which reads the `cwd` field already
+  Fixed via the Claude adapter's `deriveCwdFromProjectDir()`, which reads the `cwd` field already
   present on every JSONL line in a real session file (confirmed present on
   `attachment`/`user`/`assistant` line types) instead of guessing from the
   directory name. Dash-decoding is now only a last-resort fallback when a
@@ -60,8 +60,9 @@ absent, so a mix of indexed and non-indexed projects both list correctly
 (smoke-tested 2026-08-24: an indexed project shows its stored title, a
 non-indexed project derives one — both with correct `projectPath`).
 
-**Current handling:** `server.js` (`/api/projects/:id/sessions`, the PATCH
-rename route) treats the index as optional, falling back to:
+**Current handling:** `server/backends/claude.js` treats the index as optional;
+the backend-agnostic routes in `server.js` delegate listing and renaming to it,
+falling back to:
 - Titles: derived per-session from the JSONL itself (see #3 below).
 - Renames: persisted in a sidecar `title-overrides.json` in the same project
   dir (our own format, not a CLI convention) when there's no index entry to
@@ -95,7 +96,7 @@ user turns (an older/different CLI's naming) and only checked the *first*
 line of the file for a title. Both were wrong for the current CLI
 (`type: 'user'`, title on a later line) and were the direct cause of most
 sessions showing "(no title)". Fixed in `deriveSessionSummary()` in
-`server.js`, which scans the whole file for `ai-title` first, then falls
+`server/backends/claude.js`, which scans the whole file for `ai-title` first, then falls
 back to the first `user` turn's text.
 
 **If this breaks again:** sessions show "(no title)" despite Claude Code
@@ -118,13 +119,13 @@ against the read logic in `deriveSessionSummary()`.
   `queue-operation`, `attachment`, `file-history-snapshot`,
   `file-history-delta`, `system`, `last-prompt`, and (new as of CLI 2.1.232,
   seen 2026-08-24) `atis-latch` and `mode`. These are passed over
-  silently (the `try/catch` per-line in `parseSessionJsonl` and
+  silently (the per-line guards in `readSessionMessages` and
   `deriveSessionSummary` swallows anything that doesn't match a known
   `type`), so new unknown line types are safe by construction — but a
   **renamed or reshaped existing type** (e.g. `assistant` content blocks
   changing shape) would silently drop content instead of erroring.
 
-- Code: `parseSessionJsonl()` in `server.js`
+- Code: `readSessionMessages()` in `server/backends/claude.js`
 
 **If this breaks:** messages render blank, tool calls disappear, or partial
 history is shown with no error surfaced anywhere (fails silently by design
@@ -143,7 +144,9 @@ newline-delimited JSON on stdout with a stable set of `type`s: `stream_event`
 used to pick up `tool_use` blocks once text has already streamed via
 deltas), and `result` (turn completion, carries `session_id`).
 
-- Code: `/api/chat` route in `server.js`
+- Code: `buildSpawnSpec()` and `ClaudeEventParser` in
+  `server/backends/claude.js`; shared process supervision remains in
+  `server.js`.
 
 **Verified current flag validity (re-checked 2026-09-07, CLI 2.1.258 — no
 change since 2026-08-31/2.1.246; `--permission-mode` choices are still
@@ -165,7 +168,7 @@ still takes aliases or full names):**
 - `--permission-mode <mode>` — the discrepancy noted on 2026-08-24 was
   real and is now **fixed** (2026-08-31): the CLI's own `--help` lists
   valid choices as `acceptEdits, auto, bypassPermissions, manual, dontAsk,
-  plan` — it does not accept `default`. `server.js`'s `/api/chat` route
+  plan` — it does not accept `default`. The Claude adapter's `buildSpawnSpec()`
   previously included `'default'` in its passthrough allowlist and passed
   `--permission-mode default` straight to the CLI, relying on the
   undocumented fact that the CLI silently ignores unrecognized values
@@ -186,7 +189,7 @@ a spawn/stderr error for anyone using that mode.
 
 **Re-verify by:** `claude --help | grep -A6 -- '--model\|--permission-mode'`
 and compare literal choices against `CLI_PERMISSION_MODES`/`validModels` in
-`server.js`.
+`server/backends/claude.js`.
 
 ---
 
@@ -200,7 +203,7 @@ likely to be stable than Claude Code's own internal formats since it's a
 public API shape, but the code depends on `--include-partial-messages`
 continuing to pass those events through verbatim.
 
-- Code: `/api/chat` stdout handler in `server.js`
+- Code: `ClaudeEventParser` in `server/backends/claude.js`
 
 **If this breaks:** streamed text stops appearing incrementally (would fall
 back to nothing rendering until a full `assistant` message arrives, since
@@ -208,31 +211,62 @@ the de-dup logic assumes deltas are always sent first).
 
 ---
 
-## 7. No supported way to detect "is Claude already running for this session on another device"
+## 7. Desktop conflict detection is Claude-specific and deliberately partial
 
-**Assumption:** the "desktop ↔ mobile conflict detection" feature (README:
-"Desktop ↔ Mobile Handoff") sounds like it detects any external `claude`
-process holding a session — but it does **not**. It only tracks sessions
-*this server itself* spawned (`activeProcesses` / `activeSessionIds` Maps in
-`server.js`, populated solely inside the `/api/chat` handler). There is no
-OS-level process scan, lockfile check, or session-file lock of any kind.
+**Assumption:** Claude IDE integrations continue to write `~/.claude/ide/*.lock`
+records containing a live PID and `workspaceFolders`, and session `user` records
+continue to preserve `CLAUDE_CODE_ENTRYPOINT`. The Claude adapter combines those
+signals with this server's in-memory active-process map to distinguish a mobile
+reconnect from a likely desktop conflict.
 
-**Practical implication:** if you resume a session in the actual desktop
-Claude Code CLI (not through this mobile server) while also having it open
-via this app, the app's "Live" badge and conflict warning will **not**
-detect that — because the process wasn't spawned by this server. The
-feature only catches conflicts between two *mobile-server-spawned* accesses
-to the same session (e.g. two phones, or a phone and a stale reconnect).
+**Practical implication:** detection is project-level and IDE-only. A live
+VSCode/Cursor Claude session can be detected, but a plain terminal session has
+no IDE lock, and the lock does not identify which session within a project is
+active. Codex reports this capability as unsupported rather than applying
+Claude-specific heuristics.
 
-**If this "breaks" (i.e. if you were relying on it for true desktop
-detection):** it was never doing that; re-scope the README claim or
-implement real detection (e.g. checking `~/.claude/ide/*.lock` or an
-active-session marker the CLI itself writes, if one exists in a future
-version) before trusting it for actual desktop-CLI conflicts.
+**If this breaks:** conflict checks fail safe as "no conflict"; chat and session
+history remain available. Revalidate the IDE lock schema and `entrypoint` field
+before changing the adapter.
 
-**Re-verify by:** re-reading `server.js` for any file-based or process-scan
-based check — currently there is none; it's 100% in-memory and scoped to
-processes this server spawned.
+**Re-verify by:** reviewing `getSessionOrigin()` and
+`isDesktopLiveForCwd()` in `server/backends/claude.js`, then following the
+end-to-end decision flow in `SESSION_CONFLICT_DETECTION.md`.
+
+---
+
+## 8. `AskUserQuestion` text-fallback shape is not stable
+
+**Assumption (outdated):** when `AskUserQuestion` isn't offered as a tool in
+headless mode (see the project memory on this — same root cause as #7's
+partial detection, unrelated feature), the model dumps its intended input as
+plain assistant text shaped exactly like `{"questions": [...]}`, unwrapped
+and unfenced. `parseInteractiveQuestion()` in `src/components/ChatView.jsx`
+was written against this shape and validated against it live.
+
+**Current reality (found 2026-09-25, CLI 2.1.281 — a jump from the
+2.1.258 this doc was last verified against): the fallback shape is not
+consistent.** Live-spawned `claude -p` tests against the current CLI produced
+two different fallback behaviors for the same kind of prompt:
+- Sometimes the model just asks in plain prose/markdown (numbered list, no
+  JSON at all) — correctly falls through to normal text rendering, not a bug.
+- Sometimes it dumps the tool's actual invocation shape — `{"tool":
+  "AskUserQuestion", "input": {"questions": [...]}}` — wrapped in a
+  ` ```json ` fence. The old parser's `text.trim()` + flat `payload.questions`
+  check missed this entirely (fence breaks `JSON.parse`; even unfenced, the
+  nested `payload.input.questions` never matched `payload.questions`).
+
+**Fixed:** `parseInteractiveQuestion()` now strips a wrapping ` ``` `/` ```json `
+fence before parsing, and reads `payload.questions ?? payload.input?.questions`,
+and its returned `tool` comes from `payload.tool` when present instead of being
+hardcoded — so `INTERACTIVE_QUESTION_RENDERERS` continues to dispatch by tool
+name for either shape.
+
+**If this breaks again:** the question renders as raw JSON/fenced text
+instead of a tappable card. Re-verify by spawning `claude -p` directly (not
+nested inside another agent session, which pollutes the declared tool list)
+with a prompt that forces a clarifying question, and inspect the literal
+`assistant` text block shape before assuming the old flat shape still holds.
 
 ---
 
@@ -245,3 +279,6 @@ processes this server spawned.
 4. `ls ~/.claude/projects/*/sessions-index.json` — see if it's back/gone.
 5. Run through Rename, New Chat, and a multi-turn conversation in the app
    itself and confirm titles, streaming, and history render correctly.
+6. Force a clarifying question (a prompt that demands a multiple-choice
+   answer before proceeding) and check the raw `assistant` text shape against
+   section 8 — the model's fallback format isn't guaranteed stable.

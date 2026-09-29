@@ -18,6 +18,14 @@ function getInitialBackend() {
   return 'claude';
 }
 
+function getURLPermissionMode() {
+  return new URLSearchParams(window.location.search).get('mode');
+}
+
+function getURLModel() {
+  return new URLSearchParams(window.location.search).get('model');
+}
+
 function getInitialTheme() {
   try {
     const saved = localStorage.getItem('theme');
@@ -70,13 +78,15 @@ export default function App() {
   const [view, setView] = useState('list');
   const [chatState, setChatState] = useState(() => {
     const backend = getInitialBackend();
+    const defaults = BACKEND_DEFAULTS[backend];
     return {
       backend,
       sessionId: null,
       projectPath: null,
       projectId: null,
       title: 'New Chat',
-      ...BACKEND_DEFAULTS[backend],
+      permissionMode: getURLPermissionMode() || defaults.permissionMode,
+      model: getURLModel() || defaults.model,
     };
   });
 
@@ -91,16 +101,20 @@ export default function App() {
   );
 
   const openSession = useCallback((backend, sessionId, projectPath, projectId, title) => {
+    const defaults = BACKEND_DEFAULTS[backend] || BACKEND_DEFAULTS.claude;
+    const permissionMode = getURLPermissionMode() || defaults.permissionMode;
+    const model = getURLModel() || defaults.model;
     setChatState({
       backend,
       sessionId,
       projectPath,
       projectId,
       title,
-      ...(BACKEND_DEFAULTS[backend] || BACKEND_DEFAULTS.claude),
+      permissionMode,
+      model,
     });
     setView('chat');
-    window.history.replaceState(null, '', `/?backend=${encodeURIComponent(backend)}&session=${encodeURIComponent(sessionId)}`);
+    window.history.replaceState(null, '', `/?backend=${encodeURIComponent(backend)}&session=${encodeURIComponent(sessionId)}&mode=${encodeURIComponent(permissionMode)}&model=${encodeURIComponent(model)}`);
   }, []);
 
   const startNewChat = useCallback(() => {
@@ -127,11 +141,14 @@ export default function App() {
     if (updates.backend) {
       try { localStorage.setItem('agent_backend', updates.backend); } catch {}
     }
-    if (updates.sessionId) {
+    const sessionId = updates.sessionId || chatState.sessionId;
+    if (sessionId) {
       const backend = updates.backend || chatState.backend;
-      window.history.replaceState(null, '', `/?backend=${encodeURIComponent(backend)}&session=${encodeURIComponent(updates.sessionId)}`);
+      const permissionMode = updates.permissionMode || chatState.permissionMode;
+      const model = updates.model || chatState.model;
+      window.history.replaceState(null, '', `/?backend=${encodeURIComponent(backend)}&session=${encodeURIComponent(sessionId)}&mode=${encodeURIComponent(permissionMode)}&model=${encodeURIComponent(model)}`);
     }
-  }, [chatState.backend]);
+  }, [chatState]);
 
   const handleDeepLinkResolved = useCallback((found) => {
     setDeepLinkSessionId(null);

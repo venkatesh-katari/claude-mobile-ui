@@ -7,7 +7,7 @@ import {
   FileText, FilePen, Terminal, Search, Globe, List, BookOpen,
   Wrench, Sun, Moon, Download, Check, ChevronDown, ChevronUp, ChevronRight, Copy,
   RotateCcw, WifiOff, Square, ArrowDown, Clock, Pencil, AtSign,
-  X, History, Slash, Sparkles, Plus, GitCompare
+  X, History, Slash, Sparkles, Plus, GitCompare, Upload
 } from 'lucide-react';
 import { copyToClipboard } from '../utils/clipboard';
 import { apiFetch } from '../utils/api';
@@ -191,12 +191,34 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
   const [showGitDiff, setShowGitDiff] = useState(false);
   const [gitIsRepo, setGitIsRepo] = useState(false);
   const [resumablePid, setResumablePid] = useState(null); // pid of a dropped-but-still-running stream
+  const [uploading, setUploading] = useState(false);
   const chatRef = useRef(null);
   const inputRef = useRef(null);
   const containerRef = useRef(null);
   const abortRef = useRef(null);
   const processIdRef = useRef(null);
   const streamCreatedSessionRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  const handleFileUpload = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await apiFetch('/api/upload', { method: 'POST', body: formData });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`);
+      setInputText(prev => (prev && !prev.endsWith(' ') ? prev + ' ' : prev) + data.path + ' ');
+      setTimeout(() => inputRef.current?.focus(), 50);
+    } catch (err) {
+      setRuntimeWarning(`Upload failed: ${err.message}`);
+    } finally {
+      setUploading(false);
+    }
+  }, []);
 
   const backendDescriptor = backendDescriptors.find(item => item.id === backend) || {
     id: backend,
@@ -827,6 +849,14 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
         )}
       </div>
 
+      {/* Hidden native file picker — triggered from the "Upload a file" action item */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        style={{ display: 'none' }}
+        onChange={handleFileUpload}
+      />
+
       {/* Actions bottom sheet — single "+" entry point for all input-bar controls */}
       {showActions && (
         <div className="cv-menu-overlay" onClick={() => setShowActions(false)}>
@@ -845,6 +875,14 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
             }}>
               <span className="cv-action-icon-circle"><AtSign size={16} /></span>
               <span className="cv-action-label">Add files to chat</span>
+              <ChevronRight size={16} className="cv-action-chevron" />
+            </button>
+            <button className="cv-action-item" disabled={uploading} onClick={() => {
+              setShowActions(false);
+              fileInputRef.current?.click();
+            }}>
+              <span className="cv-action-icon-circle"><Upload size={16} /></span>
+              <span className="cv-action-label">{uploading ? 'Uploading…' : 'Upload a file'}</span>
               <ChevronRight size={16} className="cv-action-chevron" />
             </button>
             {backendDescriptor.capabilities.skillsPicker && (
@@ -1064,18 +1102,29 @@ function tryParseJson(str) {
   try { return JSON.parse(str); } catch { return null; }
 }
 
+// The model doesn't always dump the raw {questions:[...]} shape verbatim — it
+// sometimes wraps it in a ```json fence and/or nests it as the tool's actual
+// invocation shape ({tool: 'AskUserQuestion', input: {questions: [...]}})
+// rather than just the input. Both are real observed fallback shapes, not
+// hypothetical, so the detector accepts either.
+function stripCodeFence(text) {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/);
+  return match ? match[1].trim() : trimmed;
+}
+
 function parseInteractiveQuestion(text) {
   if (!text) return null;
-  const payload = tryParseJson(text.trim());
-  if (!payload || payload.questions === undefined) return null;
+  const payload = tryParseJson(stripCodeFence(text));
+  if (!payload) return null;
 
-  let questions = payload.questions;
+  let questions = payload.questions ?? payload.input?.questions;
   if (typeof questions === 'string') questions = tryParseJson(questions);
   if (!Array.isArray(questions) || questions.length === 0) return null;
   const valid = questions.every(q => q && typeof q.question === 'string' && Array.isArray(q.options) && q.options.length > 0);
   if (!valid) return null;
 
-  return { tool: 'AskUserQuestion', questions };
+  return { tool: payload.tool || 'AskUserQuestion', questions };
 }
 
 function QuestionOptions({ question, qi, selected, interactive, onToggle }) {
