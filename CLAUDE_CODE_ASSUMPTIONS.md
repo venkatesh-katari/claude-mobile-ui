@@ -137,7 +137,7 @@ of the try/catch — this is the highest-risk assumption to silently rot).
 
 **Assumption:** spawning `claude -p --output-format stream-json --verbose
 --include-partial-messages [--permission-mode <mode>] [--model <model>]
-[--resume <sessionId>]` with the prompt piped to stdin, produces
+[--effort <level>] [--resume <sessionId>]` with the prompt piped to stdin, produces
 newline-delimited JSON on stdout with a stable set of `type`s: `stream_event`
 (raw Anthropic API stream events, used for text deltas via
 `content_block_delta` / `text_delta`), `assistant` (full assistant message,
@@ -148,23 +148,24 @@ deltas), and `result` (turn completion, carries `session_id`).
   `server/backends/claude.js`; shared process supervision remains in
   `server.js`.
 
-**Verified current flag validity (re-checked 2026-09-07, CLI 2.1.258 — no
-change since 2026-08-31/2.1.246; `--permission-mode` choices are still
-`acceptEdits, auto, bypassPermissions, manual, dontAsk, plan` and `--model`
-still takes aliases or full names):**
+**Verified current flag validity (re-checked 2026-09-29, CLI 2.1.284):**
 - `--output-format stream-json`, `--include-partial-messages`,
   `--verbose`, `-p`, `--resume <id>` — all present in `claude --help`.
+- `--permission-mode` choices are still
+  `acceptEdits, auto, bypassPermissions, manual, dontAsk, plan`.
 - `--model <model>` — CLI still documents accepting **aliases** (`sonnet`,
-  `opus`, `fable`) or full model names (e.g. `claude-fable-5`). The code's
-  hardcoded allowlist (`claude-sonnet-5`, `claude-opus-4-8`, `haiku`) is
-  still narrower than what the CLI's flag format accepts, and still mixes
-  an alias (`haiku`) with full names for the other two — stylistically
-  inconsistent, but **not a live bug**: re-verified today by actually
-  spawning `claude -p --model <id> ...` for all three hardcoded values
-  (capped with `--max-budget-usd` to keep the test cheap) and confirming
-  each resolves to a valid `canonicalModel` (`claude-sonnet-5`,
-  `claude-opus-4-8`, and `haiku` → `claude-haiku-4-5`) with no error. No
-  drift here despite the allowlist/format inconsistency.
+  `opus`, `fable`) or full model names. The code's allowlist
+  (`server/backends/claude.js`, `MODELS`) was switched from hardcoded dated
+  ids to the bare aliases `sonnet` and `haiku`, so it keeps resolving to
+  Anthropic's latest release in that family with no code change here.
+  `opus` is deliberately pinned to `claude-opus-5-5[1m]` instead of the
+  `opus` alias, because `opus` currently still resolves to the older
+  `claude-opus-4-8` rather than Opus 5.5 — verified live by spawning
+  `claude -p --model <id> ...` for `sonnet` (→ `claude-sonnet-5`, ~2s),
+  `opus` alias (→ `claude-opus-4-8`), and `claude-opus-5-5[1m]` (→
+  `claude-opus-5-5`, 1M context, ~20s). `fable` was tried and dropped: it
+  hung with no output for 3+ minutes across two attempts (vs. single-digit
+  seconds for the others) and was killed rather than left in the picker.
 - `--permission-mode <mode>` — the discrepancy noted on 2026-08-24 was
   real and is now **fixed** (2026-08-31): the CLI's own `--help` lists
   valid choices as `acceptEdits, auto, bypassPermissions, manual, dontAsk,
@@ -180,6 +181,17 @@ still takes aliases or full names):**
   recognize. Also closes the previously-omitted `manual`/`dontAsk` gap,
   even though neither is exposed in the UI yet.
 
+- `--effort <level>` (added 2026-10-02, CLI 2.1.286) — `--help` lists
+  `low, medium, high, xhigh, max`. Supported levels are per model; the CLI's
+  `initialize` control request (`--input-format stream-json`, no API call)
+  reports `supportedEffortLevels`: all five for `sonnet` and Opus 5.5, none
+  for `haiku` (Haiku 4.5). `MODELS[].efforts` in `server/backends/claude.js`
+  hardcodes that result, and `buildSpawnSpec()` passes `--effort` only when
+  the chosen model lists the level; the UI's "Default" sends no flag, so
+  `effortLevel` from Claude Code settings applies. Verified live with
+  `--no-session-persistence`: `CLAUDE_EFFORT` (exposed to Bash) read `low`
+  and `max` for `--model sonnet --effort low|max`.
+
 **If this breaks:** `--model` silently no-ops instead of applying the
 user's chosen setting (wrong model used, no error shown to the user) if a
 model ID the CLI stops accepting is still in the app's allowlist; or, if a
@@ -187,9 +199,13 @@ future CLI version starts hard-validating `--permission-mode` in a way that
 rejects one of `CLI_PERMISSION_MODES`, `/api/chat` would fail outright with
 a spawn/stderr error for anyone using that mode.
 
-**Re-verify by:** `claude --help | grep -A6 -- '--model\|--permission-mode'`
+**Re-verify by:** `claude --help | grep -A6 -- '--model\|--permission-mode\|--effort'`
 and compare literal choices against `CLI_PERMISSION_MODES`/`validModels` in
-`server/backends/claude.js`.
+`server/backends/claude.js`. For effort, pipe
+`{"type":"control_request","request_id":"1","request":{"subtype":"initialize"}}`
+into `claude -p --input-format stream-json --output-format stream-json --verbose`
+and compare each model's `supportedEffortLevels` against `MODELS[].efforts`
+(note: this runs SessionStart hooks).
 
 ---
 

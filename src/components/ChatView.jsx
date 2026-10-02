@@ -13,9 +13,11 @@ import { copyToClipboard } from '../utils/clipboard';
 import { apiFetch } from '../utils/api';
 import { renderMermaidDiagram } from '../utils/mermaid';
 import { useWakeLock } from '../utils/useWakeLock';
+import { DEFAULT_EFFORT, clampEffort, effortStops } from '../utils/effort';
 import { appendTextDelta, completeTurn, finishStream, upsertToolEvent } from '../chat/events';
 import Explorer from './Explorer';
 import NewChatSetup from './NewChatSetup';
+import EffortSlider from './EffortSlider';
 import GitDiffSheet from './GitDiffSheet';
 import './ChatView.css';
 
@@ -92,7 +94,7 @@ function clearActiveProcess(id = null) {
 // ============================================================================
 // Overflow menu (⋯)
 // ============================================================================
-function OverflowMenu({ theme, onToggleTheme, onExport, canExport, permissionMode, onPermissionChange, model, onModelChange, models, permissionModes }) {
+function OverflowMenu({ theme, onToggleTheme, onExport, canExport, permissionMode, onPermissionChange, model, onModelChange, models, permissionModes, effort, onEffortChange, effortOptions }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -117,6 +119,14 @@ function OverflowMenu({ theme, onToggleTheme, onExport, canExport, permissionMod
                 {model === m.value && <Check size={14} className="cv-menu-check" />}
               </button>
             ))}
+
+            <div className="cv-menu-divider" />
+
+            {/* Unlike the pickers above, adjusting effort keeps the sheet open. */}
+            <div className="cv-menu-section-label">Effort</div>
+            <div className="cv-menu-effort">
+              <EffortSlider stops={effortOptions} value={effort} onChange={onEffortChange} />
+            </div>
 
             <div className="cv-menu-divider" />
 
@@ -162,7 +172,7 @@ function OverflowMenu({ theme, onToggleTheme, onExport, canExport, permissionMod
 // Main ChatView
 // ============================================================================
 export default function ChatView({ chatState, onBack, onUpdateState, theme, onToggleTheme }) {
-  const { backend = 'claude', sessionId, projectPath, title, permissionMode, model = 'claude-sonnet-5' } = chatState;
+  const { backend = 'claude', sessionId, projectPath, title, permissionMode, model = 'sonnet', effort = DEFAULT_EFFORT } = chatState;
   const [backendDescriptors, setBackendDescriptors] = useState([]);
   const [messages, setMessages] = useState([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -225,6 +235,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
     label: backend === 'codex' ? 'Codex CLI' : 'Claude Code',
     models: [],
     permissionModes: [],
+    effortLevels: [],
     capabilities: {
       conflictDetection: backend === 'claude',
       dollarCost: backend === 'claude',
@@ -507,7 +518,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
       const res = await apiFetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ backend, message: text, sessionId, projectPath, permissionMode, model }),
+        body: JSON.stringify({ backend, message: text, sessionId, projectPath, permissionMode, model, effort }),
         signal: abortRef.current.signal,
       });
 
@@ -561,7 +572,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
       abortRef.current = null;
       if (!isNetwork) clearActiveProcess();
     }
-  }, [backend, inputText, isStreaming, sessionId, projectPath, permissionMode, model, onUpdateState]);
+  }, [backend, inputText, isStreaming, sessionId, projectPath, permissionMode, model, effort, onUpdateState]);
 
   function handleStop() {
     if (processIdRef.current) {
@@ -625,6 +636,9 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
 
   const permissionLabel = backendDescriptor.permissionModes.find(item => item.value === permissionMode)?.label || permissionMode;
   const modelLabel = backendDescriptor.models.find(item => item.value === model)?.label || model;
+  const effortOptions = effortStops(backendDescriptor, model);
+  // Mirrors the server, which drops an effort the model doesn't support.
+  const effortLabel = effort !== DEFAULT_EFFORT && effortOptions.find(item => item.value === effort)?.label;
 
   const QUICK_PROMPTS = [
     'Review this code', 'Write tests', 'Explain this', 'Fix the bug',
@@ -720,6 +734,12 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
             {backendDescriptor.label}
             <span className="cv-header-dot">·</span>
             {modelLabel}
+            {effortLabel && (
+              <>
+                <span className="cv-header-dot">·</span>
+                {effortLabel}
+              </>
+            )}
             <span className="cv-header-dot">·</span>
             {permissionLabel}
             {sessionCost > 0 && (
@@ -745,9 +765,12 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
             permissionMode={permissionMode}
             onPermissionChange={(mode) => onUpdateState({ permissionMode: mode })}
             model={model}
-            onModelChange={(m) => onUpdateState({ model: m })}
+            onModelChange={(m) => onUpdateState({ model: m, effort: clampEffort(backendDescriptor, m, effort) })}
             models={backendDescriptor.models}
             permissionModes={backendDescriptor.permissionModes}
+            effort={effort}
+            onEffortChange={(e) => onUpdateState({ effort: e })}
+            effortOptions={effortOptions}
           />
         </div>
       </div>
@@ -759,6 +782,7 @@ export default function ChatView({ chatState, onBack, onUpdateState, theme, onTo
               backend={backend}
               backends={backendDescriptors}
               model={model}
+              effort={effort}
               projectPath={projectPath}
               permissionMode={permissionMode}
               onUpdateState={onUpdateState}

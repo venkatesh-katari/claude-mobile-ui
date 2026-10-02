@@ -4,10 +4,11 @@ import ChatView from './components/ChatView';
 import LockScreen from './components/LockScreen';
 import DiffViewerPage from './components/DiffViewerPage';
 import { clearPin, apiFetch } from './utils/api';
+import { DEFAULT_EFFORT } from './utils/effort';
 
 const BACKEND_DEFAULTS = {
-  claude: { model: 'claude-sonnet-5', permissionMode: 'plan' },
-  codex: { model: 'default', permissionMode: 'read-only' },
+  claude: { model: 'sonnet', permissionMode: 'plan', effort: DEFAULT_EFFORT },
+  codex: { model: 'default', permissionMode: 'read-only', effort: DEFAULT_EFFORT },
 };
 
 function getInitialBackend() {
@@ -24,6 +25,15 @@ function getURLPermissionMode() {
 
 function getURLModel() {
   return new URLSearchParams(window.location.search).get('model');
+}
+
+function getURLEffort() {
+  return new URLSearchParams(window.location.search).get('effort');
+}
+
+function sessionURL({ backend, sessionId, permissionMode, model, effort }) {
+  const params = new URLSearchParams({ backend, session: sessionId, mode: permissionMode, model, effort });
+  return `/?${params}`;
 }
 
 function getInitialTheme() {
@@ -87,6 +97,7 @@ export default function App() {
       title: 'New Chat',
       permissionMode: getURLPermissionMode() || defaults.permissionMode,
       model: getURLModel() || defaults.model,
+      effort: getURLEffort() || defaults.effort,
     };
   });
 
@@ -104,6 +115,7 @@ export default function App() {
     const defaults = BACKEND_DEFAULTS[backend] || BACKEND_DEFAULTS.claude;
     const permissionMode = getURLPermissionMode() || defaults.permissionMode;
     const model = getURLModel() || defaults.model;
+    const effort = getURLEffort() || defaults.effort;
     setChatState({
       backend,
       sessionId,
@@ -112,9 +124,10 @@ export default function App() {
       title,
       permissionMode,
       model,
+      effort,
     });
     setView('chat');
-    window.history.replaceState(null, '', `/?backend=${encodeURIComponent(backend)}&session=${encodeURIComponent(sessionId)}&mode=${encodeURIComponent(permissionMode)}&model=${encodeURIComponent(model)}`);
+    window.history.replaceState(null, '', sessionURL({ backend, sessionId, permissionMode, model, effort }));
   }, []);
 
   const startNewChat = useCallback(() => {
@@ -126,6 +139,7 @@ export default function App() {
       backend: s.backend,
       permissionMode: s.permissionMode,
       model: s.model,
+      effort: s.effort,
     }));
     setView('chat');
     window.history.replaceState(null, '', '/');
@@ -146,7 +160,8 @@ export default function App() {
       const backend = updates.backend || chatState.backend;
       const permissionMode = updates.permissionMode || chatState.permissionMode;
       const model = updates.model || chatState.model;
-      window.history.replaceState(null, '', `/?backend=${encodeURIComponent(backend)}&session=${encodeURIComponent(sessionId)}&mode=${encodeURIComponent(permissionMode)}&model=${encodeURIComponent(model)}`);
+      const effort = updates.effort || chatState.effort;
+      window.history.replaceState(null, '', sessionURL({ backend, sessionId, permissionMode, model, effort }));
     }
   }, [chatState]);
 

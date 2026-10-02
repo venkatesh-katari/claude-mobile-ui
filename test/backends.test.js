@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -7,6 +7,7 @@ import test from 'node:test';
 import { createClaudeBackend, ClaudeEventParser } from '../server/backends/claude.js';
 import { createCodexBackend, CodexEventParser } from '../server/backends/codex.js';
 import { appendTextDelta, completeTurn, upsertToolEvent } from '../src/chat/events.js';
+import { clampEffort, effortStops } from '../src/utils/effort.js';
 
 function parseFixture(Parser, name) {
   const parser = new Parser();
@@ -99,6 +100,12 @@ test('Claude adapter preserves invocation and parses tool results from user reco
   const backend = createClaudeBackend({ homeDirectory: root, projectsDirectory, cliVersion: 'test' });
   const spec = backend.buildSpawnSpec({ message: 'Question', projectPath: '/tmp/project', permissionMode: 'default', model: 'haiku' });
   assert.deepEqual(spec.args, ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--model', 'haiku']);
+  const withEffort = backend.buildSpawnSpec({ message: 'Question', permissionMode: 'plan', model: 'sonnet', effort: 'xhigh' });
+  assert.deepEqual(withEffort.args.slice(-4), ['--model', 'sonnet', '--effort', 'xhigh']);
+  const haikuEffort = backend.buildSpawnSpec({ message: 'Question', model: 'haiku', effort: 'max' });
+  assert.equal(haikuEffort.args.includes('--effort'), false);
+  const defaultEffort = backend.buildSpawnSpec({ message: 'Question', model: 'sonnet', effort: 'default' });
+  assert.equal(defaultEffort.args.includes('--effort'), false);
   assert.equal(backend.listProjects()[0].backend, 'claude');
   const messages = await backend.readSessionMessages('session-1');
   assert.equal(messages.find(message => message.role === 'tool_result')?.content, 'ok');
@@ -145,4 +152,56 @@ test('Codex adapter discovers projects and excludes injected context from histor
   assert.deepEqual(explicitModel.args, ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'read-only', '--model', 'gpt-test', '--thread-source', 'claude-mobile-ui', '-']);
   const unknownModel = backend.buildSpawnSpec({ message: 'Hello', projectPath: '/tmp/project', permissionMode: 'read-only', model: 'untrusted-model' });
   assert.equal(unknownModel.args.includes('untrusted-model'), false);
+});
+
+test('Codex adapter reads per-model efforts from the catalog, hiding ultra', t => {
+  const root = mkdtempSync(join(tmpdir(), 'codex-effort-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const level = effort => ({ effort, description: `${effort} description` });
+  const catalog = {
+    models: [
+      { slug: 'gpt-big', display_name: 'GPT Big', visibility: 'list', priority: 1, supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(level) },
+      { slug: 'gpt-old', display_name: 'GPT Old', visibility: 'list', priority: 2, supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'].map(level) },
+    ],
+  };
+  const command = join(root, 'fake-codex');
+  writeFileSync(command, `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(JSON.stringify(catalog))});\n`);
+  chmodSync(command, 0o755);
+  mkdirSync(join(root, '.codex'), { recursive: true });
+  writeFileSync(join(root, '.codex', 'config.toml'), "model = 'gpt-old'\nmodel_reasoning_effort = 'high'\n\n[profiles.fast]\nmodel = 'gpt-big'\n");
+
+  const backend = createCodexBackend({ homeDirectory: root, command, cliVersion: 'test' });
+  const descriptor = backend.describe();
+  assert.deepEqual(descriptor.effortLevels.map(item => item.value), ['default', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+  assert.equal(descriptor.effortLevels.find(item => item.value === 'xhigh')?.label, 'X-High');
+  assert.deepEqual(descriptor.models.map(item => [item.value, item.efforts]), [
+    ['default', ['minimal', 'low', 'medium', 'high']],
+    ['gpt-big', ['low', 'medium', 'high', 'xhigh', 'max']],
+    ['gpt-old', ['minimal', 'low', 'medium', 'high']],
+  ]);
+
+  const spec = backend.buildSpawnSpec({ message: 'Hello', permissionMode: 'read-only', model: 'gpt-big', effort: 'max' });
+  assert.deepEqual(spec.args.slice(-6, -3), ['gpt-big', '-c', 'model_reasoning_effort="max"']);
+  const unsupported = backend.buildSpawnSpec({ message: 'Hello', permissionMode: 'read-only', model: 'gpt-old', effort: 'max' });
+  assert.equal(unsupported.args.includes('-c'), false);
+  const ultra = backend.buildSpawnSpec({ message: 'Hello', permissionMode: 'read-only', model: 'gpt-big', effort: 'ultra' });
+  assert.equal(ultra.args.includes('-c'), false);
+});
+
+test('Effort clamps to the highest supported level when the model changes', () => {
+  const descriptor = {
+    effortLevels: ['default', 'low', 'medium', 'high', 'xhigh', 'max'].map(value => ({ value, label: value })),
+    models: [
+      { value: 'full', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      { value: 'capped', efforts: ['low', 'medium', 'high', 'xhigh'] },
+      { value: 'none', efforts: [] },
+    ],
+  };
+  assert.deepEqual(effortStops(descriptor, 'capped').map(item => item.value), ['default', 'low', 'medium', 'high', 'xhigh']);
+  assert.deepEqual(effortStops(descriptor, 'none').map(item => item.value), ['default']);
+  assert.equal(clampEffort(descriptor, 'capped', 'max'), 'xhigh');
+  assert.equal(clampEffort(descriptor, 'capped', 'medium'), 'medium');
+  assert.equal(clampEffort(descriptor, 'none', 'high'), 'default');
+  assert.equal(clampEffort(descriptor, 'full', 'default'), 'default');
+  assert.equal(clampEffort(descriptor, 'full', 'bogus'), 'default');
 });

@@ -15,6 +15,8 @@ export interface BackendOption {
   value: string;
   label: string;
   description?: string;
+  /** Model options only: effort values the model accepts. Empty means no effort control. */
+  efforts?: string[];
 }
 
 export interface BackendDescriptor {
@@ -29,6 +31,8 @@ export interface BackendDescriptor {
   defaultPermissionMode: string;
   models: BackendOption[];
   permissionModes: BackendOption[];
+  /** Ascending. The first entry is always `default`, which sends no effort flag. */
+  effortLevels: BackendOption[];
 }
 
 export interface ProjectSummary {
@@ -101,6 +105,7 @@ export interface TurnRequest {
   projectPath?: string | null;
   permissionMode?: string | null;
   model?: string | null;
+  effort?: string | null;
 }
 
 export interface SpawnSpec {

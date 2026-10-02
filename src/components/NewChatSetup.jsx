@@ -1,6 +1,8 @@
 import { useMemo, useState, useEffect } from 'react';
 import { Check } from 'lucide-react';
 import { apiFetch } from '../utils/api';
+import { DEFAULT_EFFORT, clampEffort, effortStops } from '../utils/effort';
+import EffortSlider from './EffortSlider';
 import './NewChatSetup.css';
 
 // Native <select> on desktop (mouse/keyboard dropdown); on touch devices the
@@ -75,7 +77,7 @@ function NotificationToggle() {
   );
 }
 
-export default function NewChatSetup({ backend, backends, model, projectPath, permissionMode, onUpdateState }) {
+export default function NewChatSetup({ backend, backends, model, effort, projectPath, permissionMode, onUpdateState }) {
   const [dirs, setDirs] = useState([]);
 
   useEffect(() => {
@@ -92,6 +94,7 @@ export default function NewChatSetup({ backend, backends, model, projectPath, pe
       onUpdateState({
         backend: fallback.id,
         model: fallback.defaultModel,
+        effort: DEFAULT_EFFORT,
         permissionMode: fallback.defaultPermissionMode,
       });
     }
@@ -131,6 +134,7 @@ export default function NewChatSetup({ backend, backends, model, projectPath, pe
           onUpdateState({
             backend: next.id,
             model: next.defaultModel,
+            effort: DEFAULT_EFFORT,
             permissionMode: next.defaultPermissionMode,
           });
         }}
@@ -151,7 +155,18 @@ export default function NewChatSetup({ backend, backends, model, projectPath, pe
             label="Model"
             value={model}
             options={modelOptions}
-            onChange={value => onUpdateState({ model: value })}
+            onChange={value => onUpdateState({ model: value, effort: clampEffort(selectedBackend, value, effort) })}
+          />
+        </>
+      )}
+
+      {selectedBackend && (
+        <>
+          <label className="ncs-label">Effort</label>
+          <EffortSlider
+            stops={effortStops(selectedBackend, model)}
+            value={effort}
+            onChange={value => onUpdateState({ effort: value })}
           />
         </>
       )}

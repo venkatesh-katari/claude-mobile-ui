@@ -23,12 +23,27 @@ import { createInterface } from 'node:readline';
 const CLI_PERMISSION_MODES = new Set([
   'plan', 'acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk',
 ]);
+// Most values are Claude Code's family aliases (`--model <alias>`), not dated
+// snapshot ids. The CLI resolves each alias to its current latest release, so
+// this list keeps working as Anthropic ships new models without edits here.
+// Opus is pinned to the 1M-context Opus 5.5 snapshot rather than the `opus`
+// alias, which still resolves to the older claude-opus-4-8.
+// `efforts` mirrors the per-model `supportedEffortLevels` the CLI reports from
+// its `initialize` control request. Haiku 4.5 has no effort support.
+const ALL_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const MODELS = [
-  { value: 'claude-sonnet-5', label: 'Sonnet', description: 'Best balance of speed and quality' },
-  { value: 'claude-opus-4-8', label: 'Opus', description: 'Most capable, slower' },
-  { value: 'haiku', label: 'Haiku', description: 'Fastest for lighter tasks' },
+  { value: 'sonnet', label: 'Sonnet', description: 'Best balance of speed and quality', efforts: ALL_EFFORTS },
+  { value: 'claude-opus-5-5[1m]', label: 'Opus', description: 'Most capable, 1M context', efforts: ALL_EFFORTS },
+  { value: 'haiku', label: 'Haiku', description: 'Fastest for lighter tasks', efforts: [] },
 ];
-const MODEL_IDS = new Set(MODELS.map(model => model.value));
+const EFFORT_LEVELS = [
+  { value: 'default', label: 'Default', description: 'Use the effort set in Claude Code settings' },
+  { value: 'low', label: 'Low', description: 'Fastest responses, lightest reasoning' },
+  { value: 'medium', label: 'Medium', description: 'Balanced speed and reasoning depth' },
+  { value: 'high', label: 'High', description: 'Deeper reasoning for complex problems' },
+  { value: 'xhigh', label: 'X-High', description: 'Extra reasoning depth for hard problems' },
+  { value: 'max', label: 'Max', description: 'Maximum reasoning depth, slowest' },
+];
 const PERMISSION_MODES = [
   { value: 'plan', label: 'Plan', description: 'Read-only analysis; no changes' },
   { value: 'acceptEdits', label: 'Accept Edits', description: 'Approve file edits; deny shell commands' },
@@ -233,10 +248,11 @@ export function createClaudeBackend(options = {}) {
         skillsPicker: true,
         toolUse: true,
       },
-      defaultModel: 'claude-sonnet-5',
+      defaultModel: 'sonnet',
       defaultPermissionMode: 'plan',
       models: MODELS,
       permissionModes: PERMISSION_MODES,
+      effortLevels: EFFORT_LEVELS,
     };
     if (!cliVersion) descriptor.unavailableReason = 'Claude Code CLI is not installed or not executable';
     return descriptor;
@@ -248,7 +264,9 @@ export function createClaudeBackend(options = {}) {
     if (request.permissionMode && CLI_PERMISSION_MODES.has(request.permissionMode)) {
       args.push('--permission-mode', request.permissionMode);
     }
-    if (request.model && MODEL_IDS.has(request.model)) args.push('--model', request.model);
+    const model = MODELS.find(item => item.value === request.model);
+    if (model) args.push('--model', model.value);
+    if (request.effort && model?.efforts.includes(request.effort)) args.push('--effort', request.effort);
     if (request.sessionId) args.push('--resume', request.sessionId);
     return {
       command,

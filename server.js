@@ -368,6 +368,7 @@ app.post('/api/chat', (req, res) => {
       projectPath: req.body?.projectPath,
       permissionMode: req.body?.permissionMode,
       model: req.body?.model,
+      effort: req.body?.effort,
     });
   } catch (error) {
     return res.status(400).json({ error: getErrorMessage(error) });

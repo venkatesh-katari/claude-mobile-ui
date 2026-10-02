@@ -16,7 +16,8 @@ import { SessionNotFoundError } from './claude.js';
 /** @typedef {import('./types.js').TokenUsage} TokenUsage */
 /** @typedef {import('./types.js').TurnRequest} TurnRequest */
 /** @typedef {{ sessionId: string, projectPath: string, filePath: string, created: string, modified: string, modifiedMs: number, gitBranch: string }} CodexCatalogEntry */
-/** @typedef {{ slug?: unknown, display_name?: unknown, description?: unknown, visibility?: unknown, priority?: unknown }} RawCodexModel */
+/** @typedef {{ slug?: unknown, display_name?: unknown, description?: unknown, visibility?: unknown, priority?: unknown, supported_reasoning_levels?: unknown }} RawCodexModel */
+/** @typedef {{ models: BackendOption[], effortLevels: BackendOption[] }} CodexModelCatalog */
 
 const CATALOG_TTL_MS = 5_000;
 const PERMISSION_MODES = [
@@ -24,11 +25,21 @@ const PERMISSION_MODES = [
   { value: 'workspace-write', label: 'Workspace write', description: 'Allow edits within the working directory' },
   { value: 'approve-for-me', label: 'Auto review', description: 'Automatically review approvals in a workspace-write sandbox' },
 ];
+/** @type {BackendOption} */
 const DEFAULT_MODEL = {
   value: 'default',
   label: 'Codex configuration',
   description: 'Use the model selected in Codex settings',
 };
+/** @type {BackendOption} */
+const DEFAULT_EFFORT = {
+  value: 'default',
+  label: 'Default',
+  description: 'Use the reasoning effort set in Codex settings',
+};
+// `ultra` hands work off to automatically spawned subagents, multiplying cost
+// and run time, so it is deliberately not offered from this UI.
+const HIDDEN_EFFORTS = new Set(['ultra']);
 
 /** @param {string} command */
 function readCliVersion(command) {
@@ -44,14 +55,76 @@ function readCliVersion(command) {
 }
 
 /**
+ * Only the top-level `model` key is read; profiles are not resolved.
+ *
+ * @param {string} configPath
+ */
+function readConfiguredModel(configPath) {
+  try {
+    const topLevel = readFileSync(configPath, 'utf-8').split(/^\s*\[/m)[0];
+    return topLevel.match(/^\s*model\s*=\s*["']([^"']+)["']/m)?.[1] || '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * @param {unknown} levels `supported_reasoning_levels` from the model catalog
+ * @param {Map<string, string>} descriptions collects the first description seen per effort
+ * @returns {string[]}
+ */
+function readEfforts(levels, descriptions) {
+  if (!Array.isArray(levels)) return [];
+  const efforts = [];
+  for (const level of levels) {
+    const effort = stringValue(level?.effort);
+    if (!effort || HIDDEN_EFFORTS.has(effort)) continue;
+    efforts.push(effort);
+    if (!descriptions.has(effort)) descriptions.set(effort, stringValue(level?.description));
+  }
+  return efforts;
+}
+
+/**
+ * Each model lists its efforts in ascending order, but models may support
+ * different subsets. Inserting every unseen effort right after its
+ * predecessor in that model's list yields one ascending order for all of them.
+ *
+ * @param {string[][]} lists
+ */
+function mergeEffortOrder(lists) {
+  /** @type {string[]} */
+  const merged = [];
+  for (const list of lists) {
+    let cursor = -1;
+    for (const effort of list) {
+      const index = merged.indexOf(effort);
+      if (index >= 0) {
+        cursor = index;
+      } else {
+        merged.splice(cursor + 1, 0, effort);
+        cursor += 1;
+      }
+    }
+  }
+  return merged;
+}
+
+/** @param {string} effort */
+function effortLabel(effort) {
+  return effort === 'xhigh' ? 'X-High' : effort.charAt(0).toUpperCase() + effort.slice(1);
+}
+
+/**
  * `codex debug models` is the same catalog used by the interactive selector.
  * Prefer its refreshed, account-aware result and fall back to the catalog
  * bundled with the installed binary when refresh or authentication fails.
  *
  * @param {string} command
- * @returns {BackendOption[]}
+ * @param {string} configuredModel model slug from config.toml, used for the "Codex configuration" option's efforts
+ * @returns {CodexModelCatalog}
  */
-function readModelCatalog(command) {
+function readModelCatalog(command, configuredModel) {
   for (const args of [['debug', 'models'], ['debug', 'models', '--bundled']]) {
     try {
       const output = execFileSync(command, args, {
@@ -64,6 +137,8 @@ function readModelCatalog(command) {
       if (!Array.isArray(payload.models)) continue;
       const catalog = /** @type {RawCodexModel[]} */ (payload.models);
       const seen = new Set();
+      /** @type {Map<string, string>} */
+      const effortDescriptions = new Map();
       const models = catalog
         .filter((model) => model?.visibility === 'list' && typeof model.slug === 'string' && model.slug)
         .sort((left, right) => {
@@ -80,14 +155,29 @@ function readModelCatalog(command) {
           value: /** @type {string} */ (model.slug),
           label: stringValue(model.display_name) || /** @type {string} */ (model.slug),
           description: stringValue(model.description),
+          efforts: readEfforts(model.supported_reasoning_levels, effortDescriptions),
         }));
-      if (models.length > 0) return [DEFAULT_MODEL, ...models];
+      if (models.length > 0) {
+        // Without a recognizable configured model, offer only efforts every model accepts.
+        const configured = models.find(model => model.value === configuredModel);
+        const defaultModel = {
+          ...DEFAULT_MODEL,
+          efforts: configured?.efforts
+            ?? models.reduce((common, model) => common.filter(effort => model.efforts.includes(effort)), models[0].efforts),
+        };
+        const effortLevels = mergeEffortOrder(models.map(model => model.efforts)).map(effort => ({
+          value: effort,
+          label: effortLabel(effort),
+          description: effortDescriptions.get(effort),
+        }));
+        return { models: [defaultModel, ...models], effortLevels: [DEFAULT_EFFORT, ...effortLevels] };
+      }
     } catch {
       // Older CLIs may not expose this debug command. The default option below
       // remains valid because it delegates model selection back to Codex.
     }
   }
-  return [DEFAULT_MODEL];
+  return { models: [DEFAULT_MODEL], effortLevels: [DEFAULT_EFFORT] };
 }
 
 /**
@@ -293,6 +383,7 @@ export class CodexEventParser {
  *   cliVersion?: string,
  *   enabled?: boolean,
  *   models?: BackendOption[],
+ *   effortLevels?: BackendOption[],
  * }} [options]
  * @returns {BackendAdapter}
  */
@@ -304,8 +395,11 @@ export function createCodexBackend(options = {}) {
   const command = options.command || 'codex';
   const enabled = options.enabled ?? process.env.CODEX_ENABLED !== '0';
   const cliVersion = enabled ? options.cliVersion ?? readCliVersion(command) : '';
-  const models = enabled && cliVersion ? options.models ?? readModelCatalog(command) : [DEFAULT_MODEL];
-  const modelIds = new Set(models.map(model => model.value));
+  const { models, effortLevels } = !enabled || !cliVersion
+    ? { models: [DEFAULT_MODEL], effortLevels: [DEFAULT_EFFORT] }
+    : options.models
+      ? { models: options.models, effortLevels: options.effortLevels ?? [DEFAULT_EFFORT] }
+      : readModelCatalog(command, readConfiguredModel(join(homeDirectory, '.codex', 'config.toml')));
 
   /** @type {{ timestamp: number, sessions: any[] } | null} */
   let catalogCache = null;
@@ -332,6 +426,7 @@ export function createCodexBackend(options = {}) {
       defaultPermissionMode: 'read-only',
       models,
       permissionModes: PERMISSION_MODES,
+      effortLevels,
     };
     if (!enabled) descriptor.unavailableReason = 'Codex support is disabled by CODEX_ENABLED=0';
     else if (!cliVersion) descriptor.unavailableReason = 'Codex CLI is not installed or not executable';
@@ -344,8 +439,12 @@ export function createCodexBackend(options = {}) {
     if (request.permissionMode === 'approve-for-me') args.push('--approve-for-me');
     else if (request.permissionMode === 'workspace-write') args.push('--sandbox', 'workspace-write');
     else args.push('--sandbox', 'read-only');
-    if (request.model && request.model !== 'default' && modelIds.has(request.model)) {
-      args.push('--model', request.model);
+    const model = models.find(item => item.value === request.model);
+    if (model && model.value !== 'default') args.push('--model', model.value);
+    // The value is TOML; quoting keeps it a string. It is safe to interpolate
+    // because it must match one of the model's catalog efforts.
+    if (request.effort && model?.efforts?.includes(request.effort)) {
+      args.push('-c', `model_reasoning_effort="${request.effort}"`);
     }
     if (request.sessionId) {
       args.push('resume', request.sessionId, '-');

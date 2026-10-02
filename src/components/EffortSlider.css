@@ -1,0 +1,92 @@
+.es { margin-bottom: 16px; }
+.es-row { display: flex; align-items: center; gap: 10px; }
+
+.es-step {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.es-step:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--accent); }
+.es-step:disabled { opacity: 0.35; cursor: default; }
+
+/* Thumb is 22px wide, so stop positions run from 11px to (width - 11px);
+   the fill gradient and the tick row both use that same span. */
+.es-track { position: relative; flex: 1; min-width: 0; }
+.es-range {
+  display: block;
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  outline: none;
+  cursor: pointer;
+}
+.es-range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(
+    to right,
+    var(--accent) calc(11px + (100% - 22px) * var(--es-fill)),
+    var(--border) 0
+  );
+}
+.es-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px;
+  height: 22px;
+  margin-top: -8px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 3px solid var(--bg-card);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.es-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 1px var(--accent), 0 0 0 5px var(--accent-dim); }
+.es-range::-moz-range-track { height: 6px; border-radius: 3px; background: var(--border); }
+.es-range::-moz-range-progress { height: 6px; border-radius: 3px; background: var(--accent); }
+.es-range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 3px solid var(--bg-card);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.es-ticks { position: absolute; top: 100%; left: 11px; right: 11px; height: 18px; }
+.es-tick {
+  position: absolute;
+  top: 0;
+  width: 18px;
+  height: 18px;
+  margin-left: -9px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+.es-tick::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+}
+.es-tick.on::after { background: var(--accent); }
+
+.es-value { margin-top: 22px; font-size: 13px; color: var(--text-dim); line-height: 1.4; }
+.es-value-label { color: var(--text); font-weight: 600; }
+.es-unsupported { font-size: 13px; color: var(--text-dim); margin-bottom: 16px; }

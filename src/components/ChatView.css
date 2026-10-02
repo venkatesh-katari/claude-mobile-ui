@@ -159,6 +159,7 @@
   flex-shrink: 0;
   margin-right: 2px;
 }
+.cv-menu-effort { padding: 4px 20px 0; }
 .cv-menu-divider {
   height: 1px;
   background: var(--border);
